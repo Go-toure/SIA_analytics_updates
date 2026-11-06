@@ -1,0 +1,13 @@
+# data and generated outputs stay out of the repository
+*.rds
+*.xlsx
+*.pptx
+*.zip
+*.pdf
+charts/
+output/
+input/
+SIA_review_*
+.Rhistory
+.RData
+.Rproj.user/
