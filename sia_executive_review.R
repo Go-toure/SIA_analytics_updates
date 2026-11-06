@@ -55,6 +55,8 @@ CFG <- list(
   admin_file     = NULL,            # NULL = look in <dashboard_dir>/input
   lqas_file      = NULL,
   im_file        = NULL,            # independent-monitoring file of the dashboard (AFRO_IM_data.rds)
+  lookup_file    = NULL,            # campaign calendar (lookup.xlsx): rounds that are Finished or In Progress; rounds on hold are not in it
+  lookup_dirs    = c("C:/Users/TOURE/Documents/Gith_repositories/Posit-LQAS-Workflow/dashboard_input/data", "C:/Users/TOURE/Documents/Gith_repositories/Posit-LQAS-Workflow/data/lookup"),
   scope_file     = NULL,            # districts in scope of each campaign (Scope.rds of the dashboard)
   period_from    = NULL,            # NULL = last `default_months` months of the data
   period_to      = NULL,
@@ -243,6 +245,18 @@ load_im <- function(path) {
          round = as.character(x$roundnumber %||% NA), date = as_date_safe(x[[dcol]]), present = g("u5_present"), vaccinated = g("u5_fm"),
          missed = ifelse(is.na(g("missed_child")), pmax(g("u5_present") - g("u5_fm"), 0), g("missed_child")),
          hh = g("number_of_hh_visited"), informed = g("care_giver_informed_sia"))
+}
+
+# campaign calendar of the pipeline (lookup.xlsx): one row per campaign round with its status; rounds on hold, postponed or cancelled are left out
+load_lookup <- function(path) {
+  if (is.na(path)) return(NULL)
+  x <- as_tibble(read_any(path)); names(x) <- str_squish(names(x))
+  need <- c("Country", "OBR Name", "Round Number", "Round Start Date")
+  if (length(setdiff(need, names(x)))) { msg("Lookup file lacks column(s):", paste(setdiff(need, names(x)), collapse = ", ")); return(NULL) }
+  st <- if ("Round Status" %in% names(x)) as.character(x[["Round Status"]]) else rep("Finished", nrow(x))
+  tibble(country = canon_country(x$Country), response = as.character(x[["OBR Name"]]), rn = round_num(x[["Round Number"]]),
+         date = as_date_safe(x[["Round Start Date"]]), status = st) %>%
+    filter(!is.na(date), !str_detect(tolower(coalesce(status, "")), "hold|postpone|cancel|suspend")) %>% distinct(country, response, rn, .keep_all = TRUE)
 }
 
 # ----------------------------------------------------------------------------- 5. ANALYSIS
@@ -445,7 +459,7 @@ period_tables <- function(camp, long) {
 # LQAS passed, by quarter of the LQAS date: all campaigns and a zoom on selected countries.
 # The two quarters shown are the last two quarters of the review window. Every LQAS lot of the file dated in those
 # quarters is counted, whether or not the campaign code can be linked to the administrative file.
-lqas_tables <- function(lqas, camp, zoom, from, to) {
+lqas_tables <- function(lqas, camp, zoom, from, to, lookup = NULL) {
   qs <- unique(floor_date(seq(as.Date(from), as.Date(to), by = "day"), "quarter"))
   qs <- tail(qs, 2)
   per <- tibble(qstart = qs, period = qlabel(qs), period_key = qkey(qs))
@@ -461,6 +475,17 @@ lqas_tables <- function(lqas, camp, zoom, from, to) {
     left_join(cam %>% group_by(period) %>% summarise(campaigns = n(), accepted = sum(accepted), accepted_rate = 100 * accepted / campaigns), by = "period")
   all <- per %>% select(period, period_key) %>% left_join(all %>% select(-period_key), by = "period") %>%
     mutate(across(c(lots, passed, campaigns, accepted), ~ ifelse(is.na(.x), 0L, as.integer(.x)))) %>% arrange(period_key)
+  # number of campaigns = campaign rounds of the calendar (lookup file, on-hold rounds excluded) that started in the quarter
+  all$campaigns_lqas <- NA_integer_
+  if (!is.null(lookup) && nrow(lookup)) {
+    byc <- isTRUE(getOption("sia_lqas_by_country"))
+    lk <- lookup %>% mutate(key = paste0(if (byc) paste0(toupper(str_squish(country)), "#") else "", norm_resp(response), "|", rn))
+    have <- if (!is.null(lqas) && nrow(lqas)) unique(lqas$key) else character()
+    for (i in seq_len(nrow(per))) {
+      z <- lk %>% filter(date >= per$qstart[i], date < per$qstart[i] %m+% months(3))
+      all$campaigns[all$period == per$period[i]] <- nrow(z); all$campaigns_lqas[all$period == per$period[i]] <- sum(z$key %in% have)
+    }
+  }
   zm <- lots %>% filter(country %in% zoom) %>% group_by(country, period, period_key) %>%
     summarise(lots = n(), passed = sum(pass), rate = 100 * passed / lots, campaigns = n_distinct(paste(Response, Round_Add)), .groups = "drop") %>% arrange(country, period_key)
   if (!nrow(lots)) message("  ! The LQAS file has no result dated in ", paste(periods, collapse = " / "), " - the LQAS slides will say so. Provide a more recent LQAS file with --lqas.")
@@ -1073,7 +1098,7 @@ build_pptx <- function(res, file, chdir) {
       x <- pp_add(x, ft_tile(big(1), COL$muted, sprintf("Districts passed in %s", a_$period[1]), sprintf("%s of %s districts \u00B7 %d campaigns", comma(a_$passed[1]), comma(a_$lots[1]), a_$campaigns[1]), 3.4, 1.55), 9.45, 3.45, 3.4, 1.55)
       x <- pp_add(x, ft_tile(ifelse(is.na(dlt), "n/a", sprintf("%+.1f pts", dlt)), ifelse(is.na(dlt), COL$muted, ifelse(dlt >= 0, COL$green, COL$red)), "Change in districts passed", sprintf("%s to %s", a_$period[1], a_$period[2]), 3.4, 1.55), 9.45, 5.2, 3.4, 1.55)
     }
-    x <- pp_txt(x, sprintf("A district passes LQAS when it meets the decision rule recorded in the LQAS file. Results are grouped by the quarter of the LQAS date. LQAS data end on %s.", ifelse(is.na(K$lqas_max), "n/a", format(K$lqas_max))), 0.45, 6.75, 12.4, 0.5, 10.5, FALSE, COL$muted)
+    x <- pp_txt(x, sprintf("A district passes LQAS when it meets the decision rule recorded in the LQAS file. Results are grouped by the quarter of the LQAS date. Campaigns are the rounds of the campaign calendar (Finished or In Progress; rounds on hold are excluded) that started in the quarter. LQAS data end on %s.", ifelse(is.na(K$lqas_max), "n/a", format(K$lqas_max))), 0.45, 6.75, 12.4, 0.5, 10.5, FALSE, COL$muted)
     zm <- res$zoom %||% CFG$zoom_countries; z_ <- lt$zoom
     x <- ns(sprintf("LQAS zoom on %d countries", length(zm)), sprintf("%s: proportion of districts passed, %s", paste(zm, collapse = " \u00B7 "), paste(pp, collapse = " vs ")))
     x <- pp_img(x, file.path(chdir, "07_lqas_passed_zoom.png"), 0.45, 1.6, 8.6, 5.0)
@@ -1209,7 +1234,7 @@ build_pptx <- function(res, file, chdir) {
 
 # ----------------------------------------------------------------------------- 11. MAIN
 run_sia_review <- function(admin_file = NULL, lqas_file = NULL, from = NULL, to = NULL, out_dir = NULL, title = NULL, zoom = NULL,
-                           make_pptx = TRUE, make_excel = TRUE, scope_file = NULL, im_file = NULL) {
+                           make_pptx = TRUE, make_excel = TRUE, scope_file = NULL, im_file = NULL, lookup_file = NULL) {
   t0 <- Sys.time()
   if (!is.null(title)) CFG$title <<- title
   out_dir <- out_dir %||% CFG$out_dir
@@ -1245,6 +1270,9 @@ run_sia_review <- function(admin_file = NULL, lqas_file = NULL, from = NULL, to 
   im_path <- find_input(im_file %||% CFG$im_file, c("AFRO_IM_data.rds"), dirs)
   im <- tryCatch(load_im(im_path), error = function(e) { msg("IM file could not be read:", conditionMessage(e)); NULL })
   msg("IM file   :", ifelse(is.na(im_path) || is.null(im), "not found: the IM slide is left out (use --im)", im_path))
+  lk_path <- find_input(lookup_file %||% CFG$lookup_file, c("lookup.xlsx", "lqas_lookup.xlsx"), c(CFG$lookup_dirs, dirs))
+  lookup <- tryCatch(load_lookup(lk_path), error = function(e) { msg("Lookup file could not be read:", conditionMessage(e)); NULL })
+  msg("Lookup    :", ifelse(is.na(lk_path) || is.null(lookup), "not found: campaigns are counted from the LQAS file (use --lookup)", lk_path))
   lqas_max <- if (!is.null(lqas) && nrow(lqas)) suppressWarnings(max(lqas$lqas_date, na.rm = TRUE)) else as.Date(NA)
   if (is.infinite(lqas_max)) lqas_max <- as.Date(NA)
 
@@ -1257,7 +1285,7 @@ run_sia_review <- function(admin_file = NULL, lqas_file = NULL, from = NULL, to 
   zoom <- zoom %||% CFG$zoom_countries
   if (length(zoom) == 1 && grepl(",", zoom)) zoom <- trimws(strsplit(zoom, ",")[[1]])
   zoom <- trimws(zoom[nzchar(zoom)]); zoom <- unique(ifelse(toupper(zoom) %in% c("DRC", "CAR"), toupper(zoom), nice_country(toupper(zoom))))
-  lt <- lqas_tables(lqas, camp, zoom, from, to)
+  lt <- lqas_tables(lqas, camp, zoom, from, to, lookup)
   res <- list(title = CFG$title, admin_file = admin_path, lqas_file = if (is.na(lqas_path)) NULL else lqas_path, scope_file = if (is.na(scope_path) || is.null(scope)) NULL else scope_path, im_file = if (is.na(im_path) || is.null(im)) NULL else im_path, imq = im_quadrants(im, from, to), K = K, camp = camp, long = long, units = units,
               country = ct, periods = pt, messages = make_messages(K, ct, pt), decisions = make_decisions(ct, K), segments = segment_table(ct), lqas_t = lt, zoom = zoom, lqas_unmatched = NULL)
   msg(sprintf("%d campaign rounds (%d evaluable, %d N/E, %d too small) in %d countries", K$n_campaigns, K$n_eval, K$n_ne, K$n_small, K$n_countries))
@@ -1287,5 +1315,5 @@ run_sia_review <- function(admin_file = NULL, lqas_file = NULL, from = NULL, to 
 
 if (sys.nframe() == 0L) {
   a <- parse_args(commandArgs(trailingOnly = TRUE))
-  invisible(run_sia_review(admin_file = a$admin, lqas_file = a$lqas, from = a$from, to = a$to, out_dir = a$out, title = a$title, zoom = a$zoom, scope_file = a$scope, im_file = a$im))
+  invisible(run_sia_review(admin_file = a$admin, lqas_file = a$lqas, from = a$from, to = a$to, out_dir = a$out, title = a$title, zoom = a$zoom, scope_file = a$scope, im_file = a$im, lookup_file = a$lookup))
 }
