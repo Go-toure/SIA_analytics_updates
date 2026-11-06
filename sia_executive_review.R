@@ -786,6 +786,12 @@ write_workbook <- function(res, file) {
         `Districts in scope` = lq_scope_n, `In scope with LQAS` = lq_scope_hit, `LQAS reach %` = round(lq_scope_pct, 1), `Scope source` = scope_src, `LQAS districts` = lq_lots, `LQAS pass %` = round(lq_pass, 1),
         `LQ4 refusal % (shown, not scored)` = round(lq_noncomp, 2), `LQ4 within standard` = ifelse(is.na(lq_noncomp), "N/E", ifelse(lq_noncomp <= CFG$noncomp_max, "Yes", "No"))), c(20, 34, 8, 12, 10, 16, 10, 22, 8, 9, 8, 6, 9, 10, 12, 12, 10, 11, 12, 11, 12, 11, 12, 9, 10, 16, 14))
   if (!is.null(res$imq)) add("IM_awareness_vs_coverage", res$imq %>% transmute(Country = cname, Province = province, District = district, `Caregiver awareness %` = round(100 * awareness, 1), `IM coverage %` = round(100 * cv, 1), `Children missed` = missed, `IM rounds` = campaigns, Quadrant = as.character(quadrant)) %>% arrange(Quadrant, Country, District), c(22, 22, 26, 14, 12, 12, 9, 38))
+  if (!is.null(res$calendar) && nrow(res$calendar)) {
+    qq <- res$lqas_t$periods
+    cal <- res$calendar %>% mutate(Quarter = qlabel(date)) %>% filter(date >= as.Date(res$K$from), date <= as.Date(res$K$to)) %>% arrange(date, country, response, rn)
+    add("Campaign_calendar", cal %>% transmute(Country = nice_country(country), `Campaign code` = response, Round = paste("Round", rn), `Round start date` = date, Quarter, `Round status` = status,
+                                               `Counted on the LQAS slide` = ifelse(Quarter %in% qq, "Yes", "")), c(22, 36, 10, 16, 12, 14, 22))
+  }
   add("Indicator_results", res$long %>% transmute(Country = country, Response, Round = Round_Add, Date = date, Period = period, Pillar = pillar, Indicator = label, Standard = standard_text, Value = round(value, 1), Result = result), c(20, 34, 8, 12, 10, 18, 28, 60, 10, 9))
   add("Indicators", IND %>% transmute(ID = id, Pillar = pillar, Indicator = label, Standard = standard_text), c(8, 20, 30, 70))
   add("By_indicator_period", res$periods$ind %>% transmute(ID = id, Pillar = pillar, Indicator = label, Period = period, `Campaigns evaluated` = n, Met = met, `Share met %` = round(rate, 1)), c(8, 20, 30, 10, 12, 8, 12))
@@ -1286,7 +1292,7 @@ run_sia_review <- function(admin_file = NULL, lqas_file = NULL, from = NULL, to 
   if (length(zoom) == 1 && grepl(",", zoom)) zoom <- trimws(strsplit(zoom, ",")[[1]])
   zoom <- trimws(zoom[nzchar(zoom)]); zoom <- unique(ifelse(toupper(zoom) %in% c("DRC", "CAR"), toupper(zoom), nice_country(toupper(zoom))))
   lt <- lqas_tables(lqas, camp, zoom, from, to, lookup)
-  res <- list(title = CFG$title, admin_file = admin_path, lqas_file = if (is.na(lqas_path)) NULL else lqas_path, scope_file = if (is.na(scope_path) || is.null(scope)) NULL else scope_path, im_file = if (is.na(im_path) || is.null(im)) NULL else im_path, imq = im_quadrants(im, from, to), K = K, camp = camp, long = long, units = units,
+  res <- list(title = CFG$title, admin_file = admin_path, lqas_file = if (is.na(lqas_path)) NULL else lqas_path, scope_file = if (is.na(scope_path) || is.null(scope)) NULL else scope_path, im_file = if (is.na(im_path) || is.null(im)) NULL else im_path, lookup_file = if (is.na(lk_path) || is.null(lookup)) NULL else lk_path, calendar = lookup, imq = im_quadrants(im, from, to), K = K, camp = camp, long = long, units = units,
               country = ct, periods = pt, messages = make_messages(K, ct, pt), decisions = make_decisions(ct, K), segments = segment_table(ct), lqas_t = lt, zoom = zoom, lqas_unmatched = NULL)
   msg(sprintf("%d campaign rounds (%d evaluable, %d N/E, %d too small) in %d countries", K$n_campaigns, K$n_eval, K$n_ne, K$n_small, K$n_countries))
 
