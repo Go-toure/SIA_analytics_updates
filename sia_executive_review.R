@@ -118,7 +118,7 @@ canon_country <- function(x) {
   x <- toupper(str_squish(as.character(x))); a <- iconv(x, to = "ASCII//TRANSLIT"); a[is.na(a)] <- x[is.na(a)]
   out <- x
   out[str_detect(a, "^CAMEROUN$|^CAMEROON$")] <- "CAMEROON"
-  out[str_detect(a, "REPUBLIQUE CENTRAFRIQUE|^CENTRAFRIQUE|^CENTRAL AFRICAN REP|^RCA$")] <- "CENTRAL AFRICAN REPUBLIC"
+  out[str_detect(a, "CENTRAFRIQUE|^CENTRAL AFRICAN REP|^RCA$")] <- "CENTRAL AFRICAN REPUBLIC"
   out[str_detect(a, "TANZANIA")] <- "TANZANIA"
   out[str_detect(a, "^GUINEA.?BISSAU")] <- "GUINEA BISSAU"
   out[str_detect(a, "^(THE )?REPUBLIC OF (THE )?CONGO$|^CONGO.?BRAZZAVILLE$")] <- "CONGO"
@@ -477,6 +477,9 @@ lqas_tables <- function(lqas, camp, zoom, from, to, lookup = NULL) {
     mutate(across(c(lots, passed, campaigns, accepted), ~ ifelse(is.na(.x), 0L, as.integer(.x)))) %>% arrange(period_key)
   # number of campaigns = campaign rounds of the calendar (lookup file, on-hold rounds excluded) that started in the quarter
   all$campaigns_lqas <- NA_integer_
+  all$countries <- as.integer(NA)
+  ctry_lots <- lots %>% group_by(period) %>% summarise(n_ct = n_distinct(country), .groups = "drop")
+  all$countries <- ctry_lots$n_ct[match(all$period, ctry_lots$period)]; all$countries[is.na(all$countries)] <- 0L
   if (!is.null(lookup) && nrow(lookup)) {
     byc <- isTRUE(getOption("sia_lqas_by_country"))
     lk <- lookup %>% mutate(key = paste0(if (byc) paste0(toupper(str_squish(country)), "#") else "", norm_resp(response), "|", rn))
@@ -484,6 +487,7 @@ lqas_tables <- function(lqas, camp, zoom, from, to, lookup = NULL) {
     for (i in seq_len(nrow(per))) {
       z <- lk %>% filter(date >= per$qstart[i], date < per$qstart[i] %m+% months(3))
       all$campaigns[all$period == per$period[i]] <- nrow(z); all$campaigns_lqas[all$period == per$period[i]] <- sum(z$key %in% have)
+      all$countries[all$period == per$period[i]] <- n_distinct(z$country)
     }
   }
   zm <- lots %>% filter(country %in% zoom) %>% group_by(country, period, period_key) %>%
@@ -497,10 +501,10 @@ ch_lqas_all <- function(lt) {
   d <- lt$all; if (!length(lt$periods)) return(NULL)
   d <- d %>% mutate(period = factor(period, levels = lt$periods), none = lots == 0)
   long <- tibble(period = d$period, rate = ifelse(d$none, 0, d$rate), none = d$none,
-                 lab = ifelse(d$none, "no LQAS result", sprintf("%d%%\n(%s of %s districts)\n%d campaigns", round(d$rate), comma(d$passed), comma(d$lots), d$campaigns)))
+                 lab = ifelse(d$none, "no LQAS result", sprintf("%d%%", round(d$rate))))
   cols <- setNames(c(COL$grey, COL$navy)[seq_along(lt$periods) + (2 - length(lt$periods))], lt$periods)
   ggplot(long, aes(period, rate, fill = period)) + geom_col(width = 0.62) +
-    geom_text(aes(label = lab, colour = none), vjust = -0.3, size = 3.6, fontface = "bold", lineheight = 0.95) +
+    geom_text(aes(label = lab, colour = none), vjust = -0.3, size = 5, fontface = "bold", lineheight = 0.95) +
     scale_colour_manual(values = c(`FALSE` = COL$text, `TRUE` = COL$muted), guide = "none") +
     scale_fill_manual(values = cols, guide = "none") +
     scale_y_continuous(limits = c(0, 118), breaks = seq(0, 100, 25), labels = function(x) paste0(x, "%"), expand = c(0, 0)) +
@@ -692,7 +696,7 @@ make_key_numbers <- function(camp, units, ct, pt, from, to, lqas_max, long) {
   mean_by <- ev %>% filter(period %in% per) %>% group_by(period, period_key) %>%
     summarise(mean = mean(score), n = n(), .groups = "drop") %>% arrange(period_key)
   ne_by <- sc %>% filter(period %in% per) %>% group_by(period, period_key) %>%
-    summarise(campaigns = n(), ne = sum(!evaluable), .groups = "drop") %>% arrange(period_key)
+    summarise(campaigns = n(), countries = n_distinct(country), ne = sum(!evaluable), .groups = "drop") %>% arrange(period_key)
   top <- ct %>% filter(!is.na(latest_score)) %>% arrange(desc(latest_score))
   list(from = from, to = to, lqas_max = lqas_max,
        n_campaigns = nrow(sc), n_eval = nrow(ev), n_ne = sum(!sc$evaluable), n_small = sum(camp$small),
@@ -797,7 +801,7 @@ write_workbook <- function(res, file) {
   add("By_indicator_period", res$periods$ind %>% transmute(ID = id, Pillar = pillar, Indicator = label, Period = period, `Campaigns evaluated` = n, Met = met, `Share met %` = round(rate, 1)), c(8, 20, 30, 10, 12, 8, 12))
   add("By_pillar_period", res$periods$pillar %>% transmute(Pillar = pillar, Period = period, `Indicator results` = n, Met = met, `Share met %` = round(rate, 1)), c(22, 10, 14, 8, 12))
   if (nrow(res$lqas_t$all)) {
-    add("LQAS_passed_all", res$lqas_t$all %>% transmute(Period = period, `LQAS districts` = lots, `Districts passed` = passed, `Districts passed %` = round(rate, 1), Campaigns = campaigns, `Campaigns accepted` = accepted, `Campaigns accepted %` = round(accepted_rate, 1)), c(12, 12, 12, 14, 12, 18, 20))
+    add("LQAS_passed_all", res$lqas_t$all %>% transmute(Period = period, `LQAS districts` = lots, `Districts passed` = passed, `Districts passed %` = round(rate, 1), Campaigns = campaigns, `Campaigns accepted` = accepted, `Campaigns accepted %` = round(accepted_rate, 1), Countries = countries), c(12, 12, 12, 14, 12, 18, 20, 12))
     add("LQAS_by_campaign", res$lqas_t$by_campaign %>% transmute(Country = country, `Campaign code (LQAS file)` = Response, Round = Round_Add, Quarter = period, `LQAS districts` = lots, `Districts passed` = passed, `Districts passed %` = round(rate, 1), `Campaign accepted` = ifelse(accepted, "Yes", "No"), `First LQAS date` = as.character(first), `Last LQAS date` = as.character(last)), c(18, 36, 10, 12, 12, 12, 14, 16, 16, 16))
     add("LQAS_passed_zoom", res$lqas_t$zoom %>% transmute(Country = country, Period = period, `LQAS districts` = lots, `Districts passed` = passed, `Districts passed %` = round(rate, 1), Campaigns = campaigns), c(20, 12, 12, 12, 14, 12))
   }
@@ -1039,7 +1043,7 @@ build_pptx <- function(res, file, chdir) {
   mb <- K$mean_by; tw <- 2.95; gap <- 0.2
   tiles <- list(list(pct(K$mean_score, 1), COL$navy, "Average campaign score", sprintf("%d assessable campaigns", K$n_eval)),
                 if (nrow(mb) >= 2) list(pct(mb$mean[2], 1), COL$navy, sprintf("%s average score", mb$period[2]), sprintf("vs %s in %s", pct(mb$mean[1], 1), mb$period[1])) else list(K$n_countries_scored, COL$navy, "Countries scored", sprintf("of %d", K$n_countries)),
-                list(K$n_campaigns, COL$navy, "Rounds scored", if (nrow(K$ne_by) >= 2) paste(sprintf("%d in %s", K$ne_by$campaigns, K$ne_by$period), collapse = "; ") else ""),
+                list(K$n_campaigns, COL$navy, sprintf("Rounds scored in %d countries", K$n_countries), if (nrow(K$ne_by) >= 2) paste(sprintf("%d in %s (%d countries)", K$ne_by$campaigns, K$ne_by$period, K$ne_by$countries), collapse = "; ") else ""),
                 list(K$n_ne, COL$red, "Campaigns left unscored", if (nrow(K$ne_by) >= 2) paste(sprintf("%d in %s", K$ne_by$ne, K$ne_by$period), collapse = "; ") else ""))
   for (i in 1:4) x <- pp_add(x, ft_tile(tiles[[i]][[1]], tiles[[i]][[2]], tiles[[i]][[3]], tiles[[i]][[4]], tw, 1.55), 0.45 + (i - 1) * (tw + gap), 1.7, tw, 1.55)
   cc <- c(COL$navy, COL$navy, COL$teal, COL$teal)
@@ -1094,14 +1098,14 @@ build_pptx <- function(res, file, chdir) {
     a_ <- lt$all; pp <- lt$periods
     x <- ns(sprintf("LQAS: proportion passed, %s", paste(pp, collapse = " vs ")), "Share of LQAS districts passed, all campaigns with LQAS results")
     x <- pp_img(x, file.path(chdir, "06_lqas_passed_all.png"), 0.45, 1.6, 8.6, 5.0)
-    big <- function(i) if (i <= nrow(a_) && a_$lots[i] > 0) pct(a_$rate[i]) else "n/a"
+    big <- function(i) if (i <= nrow(a_) && a_$lots[i] > 0) comma(a_$passed[i]) else "n/a"
     if (all(a_$lots == 0)) {
       x <- pp_add(x, ft_banner(sprintf("No LQAS result in the LQAS file for %s. LQAS data end on %s. Add the recent LQAS file (--lqas) and rerun to fill this slide.", paste(pp, collapse = " and "), ifelse(is.na(K$lqas_max), "n/a", format(K$lqas_max))), 3.4, 3.4, COL$orange, "white", 14), 9.45, 1.7, 3.4, 3.4)
     } else
-    x <- pp_add(x, ft_tile(big(nrow(a_)), COL$navy, sprintf("Districts passed in %s", a_$period[nrow(a_)]), sprintf("%s of %s districts \u00B7 %d campaigns", comma(a_$passed[nrow(a_)]), comma(a_$lots[nrow(a_)]), a_$campaigns[nrow(a_)]), 3.4, 1.55), 9.45, 1.7, 3.4, 1.55)
+    x <- pp_add(x, ft_tile(big(nrow(a_)), COL$navy, sprintf("Districts passed in %s", a_$period[nrow(a_)]), sprintf("of %s districts\n%d campaigns \u00B7 %d countries", comma(a_$lots[nrow(a_)]), a_$campaigns[nrow(a_)], a_$countries[nrow(a_)]), 3.4, 1.55), 9.45, 1.7, 3.4, 1.55)
     if (all(a_$lots == 0)) NULL else if (nrow(a_) >= 2) {
       dlt <- if (all(a_$lots > 0)) a_$rate[2] - a_$rate[1] else NA_real_
-      x <- pp_add(x, ft_tile(big(1), COL$muted, sprintf("Districts passed in %s", a_$period[1]), sprintf("%s of %s districts \u00B7 %d campaigns", comma(a_$passed[1]), comma(a_$lots[1]), a_$campaigns[1]), 3.4, 1.55), 9.45, 3.45, 3.4, 1.55)
+      x <- pp_add(x, ft_tile(big(1), COL$muted, sprintf("Districts passed in %s", a_$period[1]), sprintf("of %s districts\n%d campaigns \u00B7 %d countries", comma(a_$lots[1]), a_$campaigns[1], a_$countries[1]), 3.4, 1.55), 9.45, 3.45, 3.4, 1.55)
       x <- pp_add(x, ft_tile(ifelse(is.na(dlt), "n/a", sprintf("%+.1f pts", dlt)), ifelse(is.na(dlt), COL$muted, ifelse(dlt >= 0, COL$green, COL$red)), "Change in districts passed", sprintf("%s to %s", a_$period[1], a_$period[2]), 3.4, 1.55), 9.45, 5.2, 3.4, 1.55)
     }
     x <- pp_txt(x, sprintf("A district passes LQAS when it meets the decision rule recorded in the LQAS file. Results are grouped by the quarter of the LQAS date. Campaigns are the rounds of the campaign calendar (Finished or In Progress; rounds on hold are excluded) that started in the quarter. LQAS data end on %s.", ifelse(is.na(K$lqas_max), "n/a", format(K$lqas_max))), 0.45, 6.75, 12.4, 0.5, 10.5, FALSE, COL$muted)
