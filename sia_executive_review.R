@@ -872,14 +872,16 @@ ft_banner <- function(txt, w, h = 0.55, bg = COL$navy, col = "white", size = 16)
 # lines: list of list(label, value, colour)
 ft_panel <- function(header, lines, col, w, h, hh = 0.4, size = 13) {
   ft <- flextable::flextable(data.frame(a = c(header, ""))) %>% flextable::delete_part("header")
-  ft <- flextable::compose(ft, i = 1, j = 1, value = flextable::as_paragraph(ch(header, 13, TRUE, "white")))
+  ft <- flextable::compose(ft, i = 1, j = 1, value = flextable::as_paragraph(ch(header, 14, TRUE, col)))
   body <- if (!length(lines)) list(ch("Nothing to report", size, FALSE, COL$muted)) else
     unlist(lapply(seq_along(lines), function(i) { L <- lines[[i]]
       c(list(ch(if (i > 1) "\n" else "", size), ch(paste0("\u25B8 ", L$label), size, FALSE, COL$text), ch(L$value, size, TRUE, L$col %||% col))) }), recursive = FALSE)
   ft <- flextable::compose(ft, i = 2, j = 1, value = do.call(flextable::as_paragraph, body))
-  ft <- tbl_base(ft, w) %>% flextable::bg(i = 1, bg = col) %>% flextable::bg(i = 2, bg = "white") %>% flextable::align(i = 1, align = "center") %>%
-    flextable::valign(valign = "center") %>% flextable::border_outer(border = brd(col, 1.5)) %>% flextable::padding(i = 2, padding.left = 14, padding.top = 8)
-  ft <- flextable::height(ft, i = 1, height = hh) %>% flextable::height(i = 2, height = h - hh) %>% flextable::hrule(rule = "exact") %>% flextable::width(width = w)
+  ft <- tbl_base(ft, w) %>% flextable::align(i = 1, align = "left") %>% flextable::valign(i = 1, valign = "bottom") %>% flextable::valign(i = 2, valign = "center") %>%
+    flextable::padding(i = 1, padding.left = 16, padding.top = 12) %>% flextable::padding(i = 2, padding.left = 16, padding.top = 4)
+  ft <- flextable::border(ft, i = 1, border.bottom = brd(mix_white(col, 0.55), 1), part = "body")
+  ft <- flextable::height(ft, i = 1, height = hh + 0.08) %>% flextable::height(i = 2, height = h - hh - 0.08) %>% flextable::hrule(rule = "exact") %>% flextable::width(width = w)
+  attr(ft, "card_col") <- col
   ft
 }
 
@@ -901,7 +903,24 @@ ft_rows <- function(df, colours, widths, h, sizes = c(13, 11, 13, 12), row_bg = 
   flextable::height(ft, height = h) %>% flextable::hrule(rule = "exact")
 }
 
-pp_add <- function(x, obj, l, t, w, h) officer::ph_with(x, obj, location = officer::ph_location(left = l, top = t, width = w, height = h))
+mix_white <- function(col, k = 0.88) { v <- grDevices::col2rgb(col)[, 1]; grDevices::rgb(v[1] + (255 - v[1]) * k, v[2] + (255 - v[2]) * k, v[3] + (255 - v[3]) * k, maxColorValue = 255) }
+# card background: tinted light fill, soft shadow, coloured bar on top (drawn as a picture behind the editable table)
+card_png <- function(w, h, col, m = 0.16) {
+  f <- tempfile(fileext = ".png"); W <- w + 2 * m; H <- h + 2 * m
+  ragg::agg_png(f, width = W, height = H, units = "in", res = 200, background = "transparent")
+  grid::grid.newpage(); u <- function(v) grid::unit(v, "in")
+  for (k in 1:10) { e <- (11 - k) * 0.012
+    grid::grid.roundrect(x = u(m + w / 2), y = u(m + h / 2 - 0.05), width = u(w + 2 * e), height = u(h + 2 * e), r = u(0.07 + e), gp = grid::gpar(fill = grDevices::rgb(0, 0, 0, 0.017), col = NA)) }
+  grid::grid.roundrect(x = u(m + w / 2), y = u(m + h / 2), width = u(w), height = u(h), r = u(0.07), gp = grid::gpar(fill = col, col = NA))
+  grid::grid.roundrect(x = u(m + w / 2), y = u(m + (h - 0.08) / 2), width = u(w), height = u(h - 0.08), r = u(0.07), gp = grid::gpar(fill = mix_white(col, 0.9), col = NA))
+  grid::grid.rect(x = u(m + w / 2), y = u(m + h - 0.12), width = u(w), height = u(0.08), gp = grid::gpar(fill = mix_white(col, 0.9), col = NA))
+  grDevices::dev.off(); f
+}
+pp_add <- function(x, obj, l, t, w, h) {
+  cc <- attr(obj, "card_col")
+  if (!is.null(cc)) { m <- 0.16; x <- officer::ph_with(x, officer::external_img(card_png(w, h, cc, m), width = w + 2 * m, height = h + 2 * m), location = officer::ph_location(left = l - m, top = t - m, width = w + 2 * m, height = h + 2 * m)) }
+  officer::ph_with(x, obj, location = officer::ph_location(left = l, top = t, width = w, height = h))
+}
 pp_txt <- function(x, txt, l, t, w, h, size = 14, bold = FALSE, col = COL$text, align = "left", italic = FALSE, font = FONT) {
   fp <- officer::fpar(officer::ftext(txt, fpt(size, bold, col, italic, font)), fp_p = officer::fp_par(text.align = align))
   officer::ph_with(x, fp, location = officer::ph_location(left = l, top = t, width = w, height = h))
