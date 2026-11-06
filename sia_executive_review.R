@@ -856,9 +856,10 @@ tbl_base <- function(ft, w, h = NULL) {
 ft_tile <- function(big, big_col, label, sub, w, h) {
   ft <- flextable::flextable(data.frame(a = ""))
   ft <- flextable::delete_part(ft, "header")
-  ft <- flextable::compose(ft, j = 1, value = flextable::as_paragraph(ch(big, 30, TRUE, big_col, font = SERIF), ch("\n"), ch(label, 13, TRUE, COL$text), ch(if (nzchar(sub)) paste0("\n", sub) else "", 11, FALSE, COL$muted)))
-  ft <- tbl_base(ft, w) %>% flextable::border_outer(border = brd()) %>% flextable::bg(bg = "white") %>% flextable::valign(valign = "center")
+  ft <- flextable::compose(ft, j = 1, value = flextable::as_paragraph(ch(toupper(label), 10.5, TRUE, COL$muted), ch("\n"), ch(big, 28, TRUE, COL$text), ch(if (nzchar(sub)) paste0("\n", sub) else "", 11, FALSE, COL$muted)))
+  ft <- tbl_base(ft, w) %>% flextable::align(align = "left") %>% flextable::valign(valign = "center") %>% flextable::padding(padding.left = 16)
   ft <- flextable::height(ft, height = h) %>% flextable::hrule(rule = "exact") %>% flextable::width(width = w)
+  attr(ft, "card_col") <- big_col
   ft
 }
 
@@ -904,14 +905,15 @@ ft_rows <- function(df, colours, widths, h, sizes = c(13, 11, 13, 12), row_bg = 
 }
 
 mix_white <- function(col, k = 0.88) { v <- grDevices::col2rgb(col)[, 1]; grDevices::rgb(v[1] + (255 - v[1]) * k, v[2] + (255 - v[2]) * k, v[3] + (255 - v[3]) * k, maxColorValue = 255) }
-# card background: white with a soft shadow only (drawn as a picture behind the editable table)
+# card background: white, soft shadow and a thin coloured line along the rounded top edge (drawn as a picture behind the editable table)
 card_png <- function(w, h, col, m = 0.16) {
   f <- tempfile(fileext = ".png"); W <- w + 2 * m; H <- h + 2 * m
   ragg::agg_png(f, width = W, height = H, units = "in", res = 200, background = "transparent")
   grid::grid.newpage(); u <- function(v) grid::unit(v, "in")
   for (k in 1:10) { e <- (11 - k) * 0.012
     grid::grid.roundrect(x = u(m + w / 2), y = u(m + h / 2 - 0.05), width = u(w + 2 * e), height = u(h + 2 * e), r = u(0.07 + e), gp = grid::gpar(fill = grDevices::rgb(0, 0, 0, 0.022), col = NA)) }
-  grid::grid.roundrect(x = u(m + w / 2), y = u(m + h / 2), width = u(w), height = u(h), r = u(0.07), gp = grid::gpar(fill = "white", col = NA))
+  grid::grid.roundrect(x = u(m + w / 2), y = u(m + h / 2), width = u(w), height = u(h), r = u(0.07), gp = grid::gpar(fill = col, col = NA))
+  grid::grid.roundrect(x = u(m + w / 2), y = u(m + (h - 0.045) / 2), width = u(w), height = u(h - 0.045), r = u(0.07), gp = grid::gpar(fill = "white", col = NA))
   grDevices::dev.off(); f
 }
 pp_add <- function(x, obj, l, t, w, h) {
