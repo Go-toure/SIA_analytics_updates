@@ -418,8 +418,8 @@ ch_lqas_zoom <- function(lt, zoom) {
   grid <- grid %>% mutate(period = factor(period, levels = lt$periods), country = factor(country, levels = zoom),
                           lab = ifelse(is.na(rate), "no\nLQAS", sprintf("%d%%\n(%d lots)", round(rate), lots)), y = ifelse(is.na(rate), 0, rate))
   cols <- setNames(c(COL$grey, COL$navy)[seq_along(lt$periods) + (2 - length(lt$periods))], lt$periods)
-  ggplot(grid, aes(country, y, fill = period)) + geom_col(position = position_dodge2(width = 0.8), width = 0.75) +
-    geom_text(aes(label = lab, colour = is.na(rate)), position = position_dodge2(width = 0.8), vjust = -0.3, size = 3.2, lineheight = 0.95, show.legend = FALSE) +
+  ggplot(grid, aes(country, y, fill = period, group = period)) + geom_col(position = position_dodge2(width = 0.8), width = 0.75) +
+    geom_text(aes(label = lab, colour = is.na(rate), group = period), position = position_dodge2(width = 0.8), vjust = -0.3, size = 3.2, lineheight = 0.95, show.legend = FALSE) +
     scale_colour_manual(values = c(`FALSE` = COL$text, `TRUE` = COL$muted)) + scale_fill_manual(values = cols) +
     scale_y_continuous(limits = c(0, 122), breaks = seq(0, 100, 25), labels = function(x) paste0(x, "%"), expand = c(0, 0)) +
     labs(title = "Proportion of LQAS lots passed, selected countries") + theme_sia() +
