@@ -472,7 +472,7 @@ ch_lqas_all <- function(lt) {
   d <- lt$all; if (!length(lt$periods)) return(NULL)
   d <- d %>% mutate(period = factor(period, levels = lt$periods), none = lots == 0)
   long <- tibble(period = d$period, rate = ifelse(d$none, 0, d$rate), none = d$none,
-                 lab = ifelse(d$none, "no LQAS result", sprintf("%d%%\n(%s of %s districts)", round(d$rate), comma(d$passed), comma(d$lots))))
+                 lab = ifelse(d$none, "no LQAS result", sprintf("%d%%\n(%s of %s districts)\n%d campaigns", round(d$rate), comma(d$passed), comma(d$lots), d$campaigns)))
   cols <- setNames(c(COL$grey, COL$navy)[seq_along(lt$periods) + (2 - length(lt$periods))], lt$periods)
   ggplot(long, aes(period, rate, fill = period)) + geom_col(width = 0.62) +
     geom_text(aes(label = lab, colour = none), vjust = -0.3, size = 3.6, fontface = "bold", lineheight = 0.95) +
@@ -1067,10 +1067,10 @@ build_pptx <- function(res, file, chdir) {
     if (all(a_$lots == 0)) {
       x <- pp_add(x, ft_banner(sprintf("No LQAS result in the LQAS file for %s. LQAS data end on %s. Add the recent LQAS file (--lqas) and rerun to fill this slide.", paste(pp, collapse = " and "), ifelse(is.na(K$lqas_max), "n/a", format(K$lqas_max))), 3.4, 3.4, COL$orange, "white", 14), 9.45, 1.7, 3.4, 3.4)
     } else
-    x <- pp_add(x, ft_tile(big(nrow(a_)), COL$navy, sprintf("Districts passed in %s", a_$period[nrow(a_)]), sprintf("%s of %s districts", comma(a_$passed[nrow(a_)]), comma(a_$lots[nrow(a_)])), 3.4, 1.55), 9.45, 1.7, 3.4, 1.55)
+    x <- pp_add(x, ft_tile(big(nrow(a_)), COL$navy, sprintf("Districts passed in %s", a_$period[nrow(a_)]), sprintf("%s of %s districts \u00B7 %d campaigns", comma(a_$passed[nrow(a_)]), comma(a_$lots[nrow(a_)]), a_$campaigns[nrow(a_)]), 3.4, 1.55), 9.45, 1.7, 3.4, 1.55)
     if (all(a_$lots == 0)) NULL else if (nrow(a_) >= 2) {
       dlt <- if (all(a_$lots > 0)) a_$rate[2] - a_$rate[1] else NA_real_
-      x <- pp_add(x, ft_tile(big(1), COL$muted, sprintf("Districts passed in %s", a_$period[1]), sprintf("%s of %s districts", comma(a_$passed[1]), comma(a_$lots[1])), 3.4, 1.55), 9.45, 3.45, 3.4, 1.55)
+      x <- pp_add(x, ft_tile(big(1), COL$muted, sprintf("Districts passed in %s", a_$period[1]), sprintf("%s of %s districts \u00B7 %d campaigns", comma(a_$passed[1]), comma(a_$lots[1]), a_$campaigns[1]), 3.4, 1.55), 9.45, 3.45, 3.4, 1.55)
       x <- pp_add(x, ft_tile(ifelse(is.na(dlt), "n/a", sprintf("%+.1f pts", dlt)), ifelse(is.na(dlt), COL$muted, ifelse(dlt >= 0, COL$green, COL$red)), "Change in districts passed", sprintf("%s to %s", a_$period[1], a_$period[2]), 3.4, 1.55), 9.45, 5.2, 3.4, 1.55)
     }
     x <- pp_txt(x, sprintf("A district passes LQAS when it meets the decision rule recorded in the LQAS file. Results are grouped by the quarter of the LQAS date. LQAS data end on %s.", ifelse(is.na(K$lqas_max), "n/a", format(K$lqas_max))), 0.45, 6.75, 12.4, 0.5, 10.5, FALSE, COL$muted)
