@@ -54,6 +54,8 @@ CFG <- list(
   extra_dirs     = "C:/Users/TOURE/Documents/Gith_repositories/AFRO-Dash/input",   # other folders searched for the input files (newest file wins)
   admin_file     = NULL,            # NULL = look in <dashboard_dir>/input
   lqas_file      = NULL,
+  im_file        = NULL,            # independent-monitoring file of the dashboard (AFRO_IM_data.rds)
+  scope_file     = NULL,            # districts in scope of each campaign (Scope.rds of the dashboard)
   period_from    = NULL,            # NULL = last `default_months` months of the data
   period_to      = NULL,
   default_months = 6,
@@ -71,12 +73,13 @@ CFG <- list(
   implaus_max    = 10,    # max % of districts with an implausible figure (working default; coverage > ceiling is frequent, adjust to the technical standard)
   delay_max_days = 14,    # median days between the campaign and its report
   report_min_share = 50,  # % of districts with a report date needed to judge timeliness
-  lqas_pass_std  = 90,    # % of LQAS lots that must pass
+  lqas_pass_std  = 80,    # % of LQAS lots (districts) that must pass
+  lqas_scope_min = 80,    # % of the districts in scope that must have an LQAS result to count as "LQAS conducted" (working default, to be confirmed)
   informed_std   = 90,    # % of caregivers informed before the campaign
   noncomp_max    = 2,     # max % of sampled children missed because of refusal
   lqas_grace_days = 30,   # LQAS results are expected within this many days
-  min_evaluable  = 4,     # fewer evaluable indicators = campaign not evaluable (N/E)
-  full_evidence  = 9,     # evaluable indicators for "full" evidence (fewer = partial)
+  min_evaluable  = 3,     # fewer evaluable indicators = campaign not evaluable (N/E)
+  full_evidence  = 5,     # evaluable indicators for "full" evidence (fewer = partial)
 
   # ---- bands, trends, segments ----
   bands          = c(40, 55, 75),   # below 40 | 40-54 | 55-74 | 75 or above
@@ -90,30 +93,35 @@ CFG <- list(
   days_plan      = "15 working days and before the next SIA round"
 )
 
-COL <- list(navy = "#1B3A5F", green = "#2E7D32", gold = "#D9A441", orange = "#C77700",
+COL <- list(purple = "#7B3FA0", navy = "#1B3A5F", green = "#2E7D32", gold = "#D9A441", orange = "#C77700",
             red = "#B00020", grey = "#B8C4D0", lightgrey = "#EEF2F6", text = "#1F2937",
             muted = "#6B7280", blue = "#0F6CBD", teal = "#14808A")
 
 # ----------------------------------------------------------------------------- 2. INDICATORS
 IND <- tribble(
-  ~id,    ~pillar,              ~label,                           ~standard_text,
-  "COV1", "Coverage",           "Campaign coverage \u2265 95%",    "Campaign coverage between the standard and the ceiling",
-  "COV2", "Coverage",           "Districts at \u2265 95%",         "At least {share_ge95_std}% of districts reach the standard",
-  "COV3", "Coverage",           "Few districts below 80%",         "At most {share_low_max}% of districts below {cov_low}%",
-  "DQ1",  "Data quality",       "Complete district data",          "At least {complete_std}% of districts with target and vaccinated",
-  "DQ2",  "Data quality",       "Plausible coverage figures",      "At most {implaus_max}% of districts above {cov_ceiling}%",
-  "DQ3",  "Data quality",       "Timely reporting",                "Median report delay of at most {delay_max_days} days",
-  "DQ4",  "Data quality",       "Consistent campaign code",        "Campaign code matches the country",
-  "LQ1",  "LQAS verification",  "LQAS conducted",                  "LQAS results exist for the round",
-  "LQ2",  "LQAS verification",  "LQAS accepted",                   "At least {lqas_pass_std}% of lots pass",
-  "LQ3",  "LQAS verification",  "Caregivers informed",             "At least {informed_std}% of caregivers informed",
-  "LQ4",  "LQAS verification",  "Refusals under control",          "At most {noncomp_max}% of sampled children missed through refusal"
+  ~id,    ~pillar,              ~label,                      ~standard_text,
+  "COV1", "Coverage",           "Districts at \u2265 95%",    "At least {share_ge95_std}% of districts reach {cov_std}% coverage or more",
+  "DQ1",  "Data quality",       "Timely reporting",          "Median report delay of at most {delay_max_days} days",
+  "DQ2",  "Data quality",       "Consistent campaign code",  "Campaign code matches the country",
+  "LQ1",  "LQAS verification",  "LQAS conducted",            "At least {lqas_scope_min}% of the districts in scope have an LQAS result (districts in scope compared with districts in LQAS)",
+  "LQ2",  "LQAS verification",  "LQAS accepted",             "At least {lqas_pass_std}% of the LQAS districts pass"
 )
 IND$standard_text <- map_chr(IND$standard_text, function(s) {
   str_replace_all(s, "\\{(\\w+)\\}", function(m) as.character(CFG[[str_remove_all(m, "[{}]")]]))
 })
 
 # ----------------------------------------------------------------------------- 3. HELPERS
+# one spelling per country, whatever the source (admin file, LQAS file, scope file)
+canon_country <- function(x) {
+  x <- toupper(str_squish(as.character(x))); a <- iconv(x, to = "ASCII//TRANSLIT"); a[is.na(a)] <- x[is.na(a)]
+  out <- x
+  out[str_detect(a, "^CAMEROUN$|^CAMEROON$")] <- "CAMEROON"
+  out[str_detect(a, "REPUBLIQUE CENTRAFRIQUE|^CENTRAFRIQUE|^CENTRAL AFRICAN REP|^RCA$")] <- "CENTRAL AFRICAN REPUBLIC"
+  out[str_detect(a, "TANZANIA")] <- "TANZANIA"
+  out[str_detect(a, "^GUINEA.?BISSAU")] <- "GUINEA BISSAU"
+  out[str_detect(a, "^(THE )?REPUBLIC OF (THE )?CONGO$|^CONGO.?BRAZZAVILLE$")] <- "CONGO"
+  out
+}
 nice_country <- function(x) {
   x <- as.character(x)
   out <- str_to_title(x)
@@ -131,6 +139,8 @@ pct      <- function(x, d = 0) ifelse(is.na(x), "n/a", paste0(formatC(round(x, d
 round_num <- function(x) suppressWarnings(as.integer(str_extract(as.character(x), "\\d+")))
 # year-month written inside a campaign code (e.g. "TOG-2025-11-01_nOPV" -> "2025-11"), used as a fallback to link LQAS results to a campaign
 resp_ym <- function(x) { m <- str_match(as.character(x), "(?<![0-9])(20[0-9]{2})[-_ ]?([0-9]{1,2})"); ifelse(is.na(m[, 2]) | as.integer(m[, 3]) > 12 | as.integer(m[, 3]) < 1, NA_character_, sprintf("%s-%02d", m[, 2], as.integer(m[, 3]))) }
+# district name made comparable between the scope file, the LQAS file and the admin file
+normd <- function(x) { x <- iconv(as.character(x), to = "ASCII//TRANSLIT"); x <- toupper(x); x <- str_replace_all(x, "\\b(DISTRICT|DS|HEALTH|ZONE|COMMUNE|COUNCIL|CITY|TOWN|MUNICIPALITY|MUNICIPAL)\\b", " "); str_replace_all(x, "[^A-Z0-9]", "") }
 norm_resp <- function(x) toupper(str_replace_all(as.character(x), "[^A-Za-z0-9]", ""))
 msg <- function(...) cat(format(Sys.time(), "%H:%M:%S"), "|", ..., "\n")
 
@@ -180,7 +190,7 @@ load_admin <- function(path) {
   if (length(miss)) stop("The admin file lacks the column(s): ", paste(miss, collapse = ", "))
   for (c in c("Admin_3", "Vaccine_type", "Date_Report", "AFRO_block")) if (!c %in% names(a)) a[[c]] <- NA
   a %>% transmute(
-    Country = as.character(Country), Province = as.character(Province), District = as.character(District),
+    Country = canon_country(Country), Province = as.character(Province), District = as.character(District),
     Admin_3 = as.character(Admin_3), Response = str_squish(as.character(Response)),
     Round_Add = str_squish(as.character(Round_Add)), Vaccine_type = as.character(Vaccine_type),
     SIA_date = as_date_safe(SIA_date), Date_Report = as_date_safe(Date_Report),
@@ -194,7 +204,7 @@ load_lqas <- function(path) {
   g <- function(...) { w <- c(...); n <- names(x)[match(tolower(w), tolower(names(x)), nomatch = 0)]; n <- n[nzchar(n)]; if (length(n)) x[[n[1]]] else rep(NA, nrow(x)) }
   num <- function(v) suppressWarnings(as.numeric(v))
   out <- tibble(
-    lq_country = as.character(g("country")), province = as.character(g("province")), district = as.character(g("district")),
+    lq_country = canon_country(g("country")), province = as.character(g("province")), district = as.character(g("district")),
     Response = str_squish(as.character(g("response", "Response"))), Round_Add = str_squish(as.character(g("roundNumber"))),
     lqas_date = as_date_safe(g("lqas_end_date", "end_date", "lqas_start_date")),
     sampled = num(g("total_sampled")), vaccinated = num(g("total_vaccinated")),
@@ -209,6 +219,30 @@ load_lqas <- function(path) {
     mutate(pass = status %in% c("pass", "passed"), key = paste(norm_resp(Response), round_num(Round_Add), sep = "|"),
            ym = resp_ym(Response), key2 = ifelse(is.na(ym), NA_character_, paste0("~", ym, "|", round_num(Round_Add))), .id = row_number())
   out
+}
+
+load_scope <- function(path) {
+  if (is.na(path)) return(NULL)
+  x <- as_tibble(read_any(path))
+  need <- c("country", "district", "response")
+  if (length(setdiff(need, names(x)))) { msg("Scope file lacks column(s):", paste(setdiff(need, names(x)), collapse = ", ")); return(NULL) }
+  rn <- if ("roundNumber" %in% names(x)) x$roundNumber else NA
+  tibble(sc_country = canon_country(x$country), sc_resp = norm_resp(x$response), sc_round = round_num(rn),
+         sc_ym = resp_ym(x$response), dn = normd(x$district)) %>% filter(!is.na(dn), dn != "") %>% distinct()
+}
+
+# independent monitoring (IM) records of the dashboard: one row per district and IM round
+load_im <- function(path) {
+  if (is.na(path)) return(NULL)
+  x <- as_tibble(read_any(path)); names(x) <- tolower(names(x))
+  need <- c("country", "district", "response", "u5_present", "u5_fm")
+  if (length(setdiff(need, names(x)))) { msg("IM file lacks column(s):", paste(setdiff(need, names(x)), collapse = ", ")); return(NULL) }
+  g <- function(n) if (n %in% names(x)) suppressWarnings(as.numeric(x[[n]])) else rep(NA_real_, nrow(x))
+  dcol <- intersect(c("round_start_date", "start_date_im_end", "start_date"), names(x))[1]
+  tibble(country = canon_country(x$country), province = as.character(x$province %||% NA), district = as.character(x$district), response = as.character(x$response),
+         round = as.character(x$roundnumber %||% NA), date = as_date_safe(x[[dcol]]), present = g("u5_present"), vaccinated = g("u5_fm"),
+         missed = ifelse(is.na(g("missed_child")), pmax(g("u5_present") - g("u5_fm"), 0), g("missed_child")),
+         hh = g("number_of_hh_visited"), informed = g("care_giver_informed_sia"))
 }
 
 # ----------------------------------------------------------------------------- 5. ANALYSIS
@@ -250,13 +284,14 @@ build_units <- function(adm, from, to) {
       cv         = ifelse(!missing, 100 * vac / pop, NA_real_),
       implausible = (!is.na(cv) & cv > CFG$cov_ceiling) | (!is.na(pop) & pop <= 0 & !is.na(vac) & vac > 0),
       low        = !is.na(cv) & cv < CFG$cov_low,
-      ok95       = !is.na(cv) & cv >= CFG$cov_std & cv <= CFG$cov_ceiling,
+      ok95       = !is.na(cv) & cv >= CFG$cov_std,
+      dn         = normd(District),
       delay      = as.numeric(report - sia_date),
       key        = paste(Country, Response, Round_Add, sep = "|"))
   u
 }
 
-score_campaigns <- function(units, lqas, prefixes, lqas_max) {
+score_campaigns <- function(units, lqas, prefixes, lqas_max, scope = NULL) {
   camp <- units %>% group_by(key, Country, Response, Round_Add) %>%
     summarise(
       n_districts = n(), date = median(sia_date, na.rm = TRUE), first_date = min_date(sia_date), vaccine = paste(sort(unique(vaccine[vaccine != ""])), collapse = " + "),
@@ -296,24 +331,43 @@ score_campaigns <- function(units, lqas, prefixes, lqas_max) {
   # an LQAS result that ended before the campaign started cannot belong to it (the same campaign code is often reused)
   bad_lq <- !is.na(camp$lq_last) & camp$lq_last < camp$date - 14
   if (any(bad_lq)) { camp$lq_lots[bad_lq] <- NA; camp$lq_pass[bad_lq] <- NA; camp$lq_informed[bad_lq] <- NA; camp$lq_noncomp[bad_lq] <- NA; camp$lq_last[bad_lq] <- as.Date(NA); camp$lkey[bad_lq] <- NA_character_ }
+  # LQ1 : districts in scope compared with districts in LQAS
+  rn_ <- round_num(camp$Round_Add); ym_ <- resp_ym(camp$Response)
+  ld <- NULL
+  if (!is.null(lqas) && nrow(lqas)) ld <- bind_rows(lqas %>% transmute(key = key, dn = normd(district)), lqas %>% filter(!is.na(key2)) %>% transmute(key = key2, dn = normd(district))) %>% filter(!is.na(dn), dn != "") %>% distinct()
+  ldl <- if (!is.null(ld)) split(ld$dn, ld$key) else list()
+  sc_info <- lapply(seq_len(nrow(camp)), function(i) {
+    ctry <- toupper(str_squish(camp$Country[i])); rs <- norm_resp(camp$Response[i]); d <- NULL; src <- NA_character_
+    if (!is.null(scope)) {
+      d <- scope$dn[scope$sc_country == ctry & scope$sc_resp == rs & scope$sc_round %in% rn_[i]]; src <- "scope"
+      if (!length(d)) d <- scope$dn[scope$sc_resp == rs & scope$sc_round %in% rn_[i]]
+      if (!length(d) && !is.na(ym_[i])) { d <- scope$dn[scope$sc_country == ctry & scope$sc_ym %in% ym_[i] & scope$sc_round %in% rn_[i]] }
+    }
+    if (!length(d)) { d <- units$dn[units$key == camp$key[i]]; src <- "admin" }
+    d <- unique(d[!is.na(d) & d != ""])
+    got <- if (!is.na(camp$lkey[i])) ldl[[camp$lkey[i]]] else NULL
+    c(n = length(d), hit = length(intersect(d, got)), src = src)
+  })
+  camp$lq_scope_n <- as.integer(map_chr(sc_info, "n")); camp$lq_scope_hit <- as.integer(map_chr(sc_info, "hit")); camp$scope_src <- map_chr(sc_info, "src")
+  camp$lq_scope_pct <- ifelse(camp$lq_scope_n > 0, 100 * camp$lq_scope_hit / camp$lq_scope_n, NA_real_)
+  # LQAS of the country dated around the campaign that could not be linked to it (e.g. placeholder campaign name): LQ1 stays N/E
+  camp$lq_unlinked <- FALSE
+  if (!is.null(lqas) && nrow(lqas)) {
+    used <- unique(na.omit(c(camp$lkey)))
+    ul <- lqas %>% filter(!(key %in% used), !(coalesce(key2, "") %in% used), !is.na(lqas_date))
+    camp$lq_unlinked <- map_lgl(seq_len(nrow(camp)), function(i) any(toupper(str_squish(ul$lq_country)) == toupper(str_squish(camp$Country[i])) & ul$lqas_date >= camp$date[i] - 7 & ul$lqas_date <= camp$date[i] + 75, na.rm = TRUE))
+  }
   camp$lq_expected <- !is.na(lqas_max) & (camp$date + CFG$lqas_grace_days <= lqas_max)
 
   yn <- function(ok, na) ifelse(na, "N/E", ifelse(ok, "Yes", "No"))
   res <- camp %>% transmute(
-    key, 
-    COV1 = yn(!is.na(cov_total) & cov_total >= CFG$cov_std & cov_total <= CFG$cov_ceiling, is.na(cov_total)),
-    COV2 = yn(!is.na(share_ge95) & share_ge95 >= CFG$share_ge95_std, is.na(share_ge95)),
-    COV3 = yn(!is.na(share_low) & share_low <= CFG$share_low_max, is.na(share_low)),
-    DQ1  = yn(complete >= CFG$complete_std, FALSE),
-    DQ2  = yn(implaus <= CFG$implaus_max, FALSE),
-    DQ3  = yn(!is.na(med_delay) & med_delay >= 0 & med_delay <= CFG$delay_max_days, report_share < CFG$report_min_share | is.na(med_delay)),
-    DQ4  = yn(isTRUE(code_ok) | code_ok %in% TRUE, is.na(code_ok)),
-    LQ1  = ifelse(!is.na(lq_lots), "Yes", ifelse(lq_expected, "No", "N/E")),
-    LQ2  = yn(!is.na(lq_pass) & lq_pass >= CFG$lqas_pass_std, is.na(lq_pass)),
-    LQ3  = yn(!is.na(lq_informed) & lq_informed >= CFG$informed_std, is.na(lq_informed)),
-    LQ4  = yn(!is.na(lq_noncomp) & lq_noncomp <= CFG$noncomp_max, is.na(lq_noncomp)))
-  vals <- camp %>% transmute(key, COV1 = cov_total, COV2 = share_ge95, COV3 = share_low, DQ1 = complete, DQ2 = implaus,
-                             DQ3 = med_delay, DQ4 = as.numeric(code_ok), LQ1 = lq_lots, LQ2 = lq_pass, LQ3 = lq_informed, LQ4 = lq_noncomp)
+    key,
+    COV1 = yn(!is.na(share_ge95) & share_ge95 >= CFG$share_ge95_std, is.na(share_ge95)),
+    DQ1  = yn(!is.na(med_delay) & med_delay >= 0 & med_delay <= CFG$delay_max_days, report_share < CFG$report_min_share | is.na(med_delay)),
+    DQ2  = yn(isTRUE(code_ok) | code_ok %in% TRUE, is.na(code_ok)),
+    LQ1  = case_when(!is.na(lq_scope_pct) & lq_scope_pct >= CFG$lqas_scope_min ~ "Yes", is.na(lq_scope_pct) ~ "N/E", !lq_expected ~ "N/E", lq_unlinked ~ "N/E", TRUE ~ "No"),
+    LQ2  = yn(!is.na(lq_pass) & lq_pass >= CFG$lqas_pass_std, is.na(lq_pass)))
+  vals <- camp %>% transmute(key, COV1 = share_ge95, DQ1 = med_delay, DQ2 = as.numeric(code_ok), LQ1 = lq_scope_pct, LQ2 = lq_pass)
   long <- res %>% pivot_longer(-key, names_to = "id", values_to = "result") %>%
     left_join(vals %>% pivot_longer(-key, names_to = "id", values_to = "value"), by = c("key", "id")) %>%
     left_join(IND, by = "id")
@@ -323,7 +377,7 @@ score_campaigns <- function(units, lqas, prefixes, lqas_max) {
     mutate(evaluable = !small & n_eval >= CFG$min_evaluable,
            score = ifelse(evaluable, round(score_raw), NA_real_),
            status = ifelse(small, "Not scored (small round)", ifelse(evaluable, "Evaluable", "N/E")),
-           evidence = ifelse(!evaluable, NA, ifelse(n_eval >= CFG$full_evidence, "Full", ifelse(n_eval >= CFG$min_evaluable + 2, "Partial", "Limited"))),
+           evidence = ifelse(!evaluable, NA, ifelse(n_eval >= CFG$full_evidence, "Full", ifelse(n_eval >= CFG$min_evaluable + 1, "Partial", "Limited"))),
            period = qlabel(date), period_key = qkey(date), month = format(date, "%b %Y"),
            country = nice_country(Country)) %>%
     arrange(Country, date)
@@ -337,13 +391,13 @@ country_table <- function(camp, long) {
     d <- arrange(d, date); e <- filter(d, evaluable)
     last_any <- d[nrow(d), ]
     if (!nrow(e)) return(tibble(n_campaigns = nrow(d), n_eval = 0L, first_score = NA_real_, latest_score = NA_real_, latest_response = last_any$Response,
-      latest_round = last_any$Round_Add, latest_date = last_any$date, first_date = NA, latest_is_last = FALSE, latest_evidence = NA_character_, latest_implaus = last_any$implaus,
+      latest_round = last_any$Round_Add, latest_date = last_any$date, first_date = NA, latest_is_last = FALSE, latest_evidence = NA_character_, latest_lqmiss = isTRUE(last_any$lq_unlinked) & is.na(last_any$lq_lots),
       failed = ""))
     l <- e[nrow(e), ]; f <- e[1, ]
     fl <- long %>% filter(key == l$key, result == "No") %>% pull(label)
     tibble(n_campaigns = nrow(d), n_eval = nrow(e), first_score = f$score, latest_score = l$score, latest_response = l$Response,
            latest_round = l$Round_Add, latest_date = l$date, first_date = f$date, latest_is_last = identical(l$key, last_any$key),
-           latest_evidence = l$evidence, latest_implaus = l$implaus, failed = paste(fl, collapse = "; "))
+           latest_evidence = l$evidence, latest_lqmiss = isTRUE(l$lq_unlinked) & is.na(l$lq_lots), failed = paste(fl, collapse = "; "))
   }) %>% ungroup()
   out <- out %>% mutate(
     change = ifelse(n_eval >= 2, latest_score - first_score, NA_real_),
@@ -354,7 +408,7 @@ country_table <- function(camp, long) {
                         latest_score < CFG$bands[1] | (latest_score < CFG$bands[2] & trend == "Declining") ~ "Intensive support",
                         latest_score < CFG$bands[2] ~ "Active watch",
                         latest_score < CFG$bands[3] ~ "Focused fixes", TRUE ~ "Sustain gains"),
-    needs_validation = n_eval == 0 | !latest_is_last | latest_evidence %in% "Limited" | coalesce(latest_implaus, 0) > 25)
+    needs_validation = n_eval == 0 | !latest_is_last | latest_evidence %in% "Limited" | latest_lqmiss %in% TRUE)
   out
 }
 
@@ -500,6 +554,59 @@ ch_dq <- function(camp, long) {
     labs(title = "Reliability standards missed (% of campaigns)") + theme_sia()
 }
 
+# LQ4: refusals under control (shown, not scored)
+latest_lqas_campaign <- function(camp) camp %>% filter(!small, !is.na(lq_noncomp)) %>% arrange(Country, date) %>% group_by(country) %>% slice_tail(n = 1) %>% ungroup()
+ch_refusal <- function(camp) {
+  d <- latest_lqas_campaign(camp)
+  if (!nrow(d)) return(NULL)
+  d <- d %>% mutate(ok = lq_noncomp <= CFG$noncomp_max, country = fct_reorder(country, lq_noncomp))
+  xmax <- max(CFG$noncomp_max * 1.6, max(d$lq_noncomp) * 1.25)
+  ggplot(d, aes(lq_noncomp, country, fill = ok)) + geom_col(width = 0.72) +
+    geom_text(aes(label = sprintf("%.1f%%", lq_noncomp)), hjust = -0.15, fontface = "bold", colour = COL$text, size = 3.4) +
+    geom_vline(xintercept = CFG$noncomp_max, colour = COL$red, linetype = "dashed", linewidth = 0.7) +
+    annotate("text", x = CFG$noncomp_max, y = Inf, label = sprintf("standard: %g%%", CFG$noncomp_max), hjust = -0.1, vjust = 1.6, colour = COL$red, size = 3.3) +
+    scale_fill_manual(values = c(`TRUE` = COL$green, `FALSE` = COL$red), guide = "none") +
+    scale_x_continuous(limits = c(0, xmax), labels = function(x) paste0(x, "%"), expand = c(0, 0)) +
+    labs(title = "Sampled children missed through refusal, latest campaign with LQAS") + theme_sia()
+}
+
+# IM data: social mobilisation (caregiver awareness) vs coverage, one point per district (shown, not scored); same rules as the dashboard IM module
+IM_Q <- c("Low awareness + low coverage", "Low awareness but acceptable coverage", "High awareness but low coverage", "High awareness + good coverage")
+IM_COL <- c("Low awareness + low coverage" = "#C8553D", "Low awareness but acceptable coverage" = "#E8730A", "High awareness but low coverage" = "#9B59B6", "High awareness + good coverage" = "#005C97")
+im_quadrants <- function(im, from, to) {
+  if (is.null(im) || !nrow(im)) return(NULL)
+  d <- im %>% filter(!is.na(date), date >= from, date <= to) %>% mutate(aw_row = ifelse(!is.na(hh) & hh > 0, informed / hh, NA_real_))
+  if (!nrow(d)) return(NULL)
+  s <- d %>% group_by(country, province, district) %>% summarise(
+      cv = sum(vaccinated, na.rm = TRUE) / pmax(sum(present, na.rm = TRUE), 1), awareness = mean(aw_row, na.rm = TRUE),
+      missed = sum(missed, na.rm = TRUE), campaigns = n_distinct(response), .groups = "drop") %>%
+    filter(is.finite(awareness), is.finite(cv)) %>%
+    mutate(quadrant = factor(case_when(awareness < 0.80 & cv < 0.90 ~ IM_Q[1], awareness < 0.80 & cv >= 0.90 ~ IM_Q[2], awareness >= 0.80 & cv < 0.90 ~ IM_Q[3], TRUE ~ IM_Q[4]), levels = IM_Q),
+           cname = nice_country(country))
+  if (!nrow(s)) NULL else s
+}
+ch_im <- function(s) {
+  if (is.null(s) || !nrow(s)) return(NULL)
+  n <- table(s$quadrant)
+  lab <- tibble(quadrant = factor(IM_Q, levels = IM_Q), x = c(0.39, 0.39, 0.92, 0.92), y = c(0.48, 1.06, 0.48, 1.06),
+                txt = paste0(IM_Q, "\n", as.integer(n[IM_Q]), " areas"))
+  s <- s %>% arrange(desc(missed))
+  ggplot(s, aes(awareness, cv)) +
+    geom_vline(xintercept = 0.8, linetype = "dotted", colour = "#6B7280", linewidth = 0.7) + geom_hline(yintercept = 0.9, linetype = "dotted", colour = "#6B7280", linewidth = 0.7) +
+    geom_point(aes(size = missed, fill = quadrant), shape = 21, colour = "white", stroke = 0.4, alpha = 0.75) +
+    geom_label(data = lab, aes(x, y, label = txt, colour = quadrant), fill = alpha("white", 0.85), size = 3.1, fontface = "bold", label.size = 0.4, label.r = grid::unit(0, "pt"), lineheight = 0.95, show.legend = FALSE) +
+    annotate("text", x = 0.795, y = 0.2, label = "Awareness threshold: 80%", angle = 90, hjust = 0.5, vjust = -0.4, size = 2.7, colour = "#6B7280") +
+    annotate("text", x = 0.85, y = 0.875, label = "CV target: 90%", size = 2.7, colour = "#6B7280") +
+    scale_size_continuous(range = c(1.2, 7), guide = "none") +
+    scale_fill_manual(values = IM_COL, drop = FALSE, guide = guide_legend(nrow = 2, override.aes = list(size = 4, alpha = 1))) +
+    scale_colour_manual(values = IM_COL, guide = "none") +
+    scale_x_continuous(limits = c(-0.02, 1.05), breaks = seq(0, 1, 0.2), labels = function(v) paste0(round(v * 100), "%"), expand = c(0, 0)) +
+    scale_y_continuous(limits = c(-0.02, 1.1), breaks = seq(0, 1, 0.2), labels = function(v) paste0(round(v * 100), "%"), expand = c(0, 0)) +
+    labs(title = "Social mobilisation awareness vs vaccination coverage", x = "Caregiver awareness rate (%)", y = "Vaccination coverage, IM (%)",
+         caption = "Advocacy message: low-awareness districts require intensified pre-campaign mobilisation") +
+    theme_sia() + theme(axis.title = element_text(colour = COL$muted), panel.grid.major.y = element_line(colour = "#ECEFF3"), legend.position = "bottom", plot.caption = element_text(hjust = 1))
+}
+
 save_png <- function(p, file, w = 9, h = 6.2) {
   if (is.null(p)) return(invisible(NULL))
   ragg::agg_png(file, width = w, height = h, units = "in", res = 200, background = "white")
@@ -508,7 +615,7 @@ save_png <- function(p, file, w = 9, h = 6.2) {
 
 # ----------------------------------------------------------------------------- 7. KEY NUMBERS, MESSAGES, DECISIONS
 ACTION_BY_PILLAR <- c(Coverage = "revisit under-vaccinated districts, strengthen supervision and step up community mobilisation",
-                      `Data quality` = "clean and complete the district records before the next round",
+                      `Data quality` = "report on time and keep the campaign code consistent with the country",
                       `LQAS verification` = "schedule LQAS on time, revaccinate failed lots and record the follow-up")
 
 list_names <- function(x, max = 12) {
@@ -534,7 +641,10 @@ make_key_numbers <- function(camp, units, ct, pt, from, to, lqas_max, long) {
        best = top[1, ], worst = top[nrow(top), ],
        gaps = sum(long$result == "No" & long$evaluable), n_districts = nrow(units),
        n_missing = sum(units$missing), n_implaus = sum(units$implausible), n_low = sum(units$low, na.rm = TRUE),
-       n_code_bad = sum(sc$code_ok %in% FALSE), n_limited = sum(ev$evidence %in% "Limited"))
+       n_code_bad = sum(sc$code_ok %in% FALSE),
+       med_delay_all = suppressWarnings(median(ev$med_delay[ev$med_delay >= 0], na.rm = TRUE)), n_late = sum(ev$med_delay > CFG$delay_max_days, na.rm = TRUE), n_delay_known = sum(!is.na(ev$med_delay)),
+       lq_scope_pct_all = { z <- sc %>% filter(lq_expected, !small, lq_scope_n > 0, !(lq_unlinked & is.na(lq_lots))); ifelse(nrow(z), 100 * sum(z$lq_scope_hit) / sum(z$lq_scope_n), NA_real_) },
+       n_lq_unlinked = sum(sc$lq_unlinked & is.na(sc$lq_lots), na.rm = TRUE), n_limited = sum(ev$evidence %in% "Limited"))
 }
 
 make_messages <- function(K, ct, pt) {
@@ -549,8 +659,9 @@ make_messages <- function(K, ct, pt) {
                 ifelse(nrow(imp), sprintf("%s moved up", paste0(head(imp$country, 2), " (", sprintf("%+d", as.integer(head(imp$change, 2))), ")", collapse = " and ")), "No country moved up"),
                 ifelse(nrow(dec), sprintf("whereas %s slipped back (%s)", paste0(head(dec$country, 2), collapse = " and "), paste(sprintf("%+d", as.integer(head(dec$change, 2))), collapse = ", ")), "and none slipped back"),
                 sprintf("%d of %d countries are still under %d%% in their latest campaign.", K$n_below, K$n_countries_scored, CFG$bands[2]))
-  m3 <- sprintf("%s district records have no target or no vaccinated figure and %s report coverage above %d%%. %d campaign%s %s impossible to score, and %d campaign code%s point to another country.",
-                comma(K$n_missing), comma(K$n_implaus), CFG$cov_ceiling, K$n_ne, ifelse(K$n_ne == 1, "", "s"), ifelse(K$n_ne == 1, "is", "are"), K$n_code_bad, ifelse(K$n_code_bad == 1, "", "s"))
+  m3 <- sprintf("Only %d of %d campaigns with a delay figure report within %d days (median delay %s days). LQAS covers %s of the districts in scope. %d campaign%s %s impossible to score, and %d campaign code%s point to another country.",
+                K$n_delay_known - K$n_late, K$n_delay_known, CFG$delay_max_days, ifelse(is.finite(K$med_delay_all), sprintf("%.0f", K$med_delay_all), "n/a"), ifelse(is.na(K$lq_scope_pct_all), "n/a", pct(K$lq_scope_pct_all, 0)),
+                K$n_ne, ifelse(K$n_ne == 1, "", "s"), ifelse(K$n_ne == 1, "is", "are"), K$n_code_bad, ifelse(K$n_code_bad == 1, "", "s"))
   weak <- pt$ind %>% filter(period == tail(per, 1)) %>% arrange(rate) %>% head(3)
   m4 <- sprintf("In %s the standards most often missed are %s. Support should go to these causes, not just to the headline scores.",
                 tail(per, 1), paste0(weak$label, " (", round(weak$rate), "%)", collapse = ", "))
@@ -565,7 +676,7 @@ make_decisions <- function(ct, K) {
   below <- ct %>% filter(!is.na(latest_score), latest_score < CFG$bands[2]) %>% pull(country)
   val <- ct %>% filter(needs_validation) %>% pull(country)
   tibble(
-    Action = c(paste0("Clean up ", ifelse(K$n_ne > 0, sprintf("the %d campaign%s that cannot be scored and ", K$n_ne, ifelse(K$n_ne == 1, "", "s")), ""), sprintf("the %s doubtful or incomplete district records (%s)", comma(K$n_missing + K$n_implaus), ifelse(length(val), list_names(val, 6), "no country flagged"))),
+    Action = c(paste0("Clean up ", ifelse(K$n_ne > 0, sprintf("the %d campaign%s that cannot be scored and ", K$n_ne, ifelse(K$n_ne == 1, "", "s")), ""), sprintf("the %d LQAS result group%s that could not be linked to a campaign (%s)", K$n_lq_unlinked, ifelse(K$n_lq_unlinked == 1, "", "s"), ifelse(length(val), list_names(val, 6), "no country flagged"))),
                sprintf("Prepare a recovery plan for the %d countries under %d%% (%s)", length(below), CFG$bands[2], list_names(below, 6)),
                "Re-run this analysis every month to follow the open gaps",
                "Confirm that failed LQAS lots were analysed and revaccinated"),
@@ -602,7 +713,7 @@ write_workbook <- function(res, file) {
       "See sheet Indicators: pillar, standard, and the number met / not met / N/E for every campaign in Indicator_results.",
       sprintf("Latest evaluable score: below %d%% | %d-%d%% | %d-%d%% | %d%% or above", CFG$bands[1], CFG$bands[1], CFG$bands[2] - 1, CFG$bands[2], CFG$bands[3] - 1, CFG$bands[3]),
       sprintf("First vs latest evaluable campaign; change within +/-%d points = No change", CFG$trend_tol),
-      "Intensive support: score below the first band or below the second band and declining | Active watch | Focused fixes | Sustain gains | Validate data first (cross-cutting: N/E, partial evidence, or implausible data)",
+      "Intensive support: score below the first band or below the second band and declining | Active watch | Focused fixes | Sustain gains | Validate data first (cross-cutting: N/E, limited evidence, or LQAS results not linked to the campaign)",
       "The standards in sheet Standards are working defaults to be confirmed by the technical team. Admin coverage is not an independent verification; LQAS is used where it exists."))
   add("README", readme, c(26, 120))
   add("Country_summary", res$country %>% transmute(Country = country, `Latest score` = latest_score, Band = as.character(band), Risk = as.character(risk), Trend = trend, `First score` = first_score, Change = change,
@@ -611,7 +722,9 @@ write_workbook <- function(res, file) {
   add("Campaign_scores", res$camp %>% transmute(Country = country, Response, Round = Round_Add, Date = date, Period = period, Vaccine = vaccine, Districts = n_districts, Status = status, Score = score,
         `Indicators met` = n_yes, `Not met` = n_no, `N/E` = n_ne, Evidence = evidence, `Coverage %` = round(cov_total, 1), `Districts >= std %` = round(share_ge95, 1),
         `Districts < low %` = round(share_low, 1), `Complete %` = round(complete, 1), `Implausible %` = round(implaus, 1), `Median report delay (d)` = med_delay,
-        `LQAS lots` = lq_lots, `LQAS pass %` = round(lq_pass, 1)), c(20, 34, 8, 12, 10, 16, 10, 22, 8, 9, 8, 6, 9, 10, 12, 12, 10, 11, 12, 9, 10))
+        `Districts in scope` = lq_scope_n, `In scope with LQAS` = lq_scope_hit, `LQAS reach %` = round(lq_scope_pct, 1), `Scope source` = scope_src, `LQAS lots` = lq_lots, `LQAS pass %` = round(lq_pass, 1),
+        `LQ4 refusal % (shown, not scored)` = round(lq_noncomp, 2), `LQ4 within standard` = ifelse(is.na(lq_noncomp), "N/E", ifelse(lq_noncomp <= CFG$noncomp_max, "Yes", "No"))), c(20, 34, 8, 12, 10, 16, 10, 22, 8, 9, 8, 6, 9, 10, 12, 12, 10, 11, 12, 11, 12, 11, 12, 9, 10, 16, 14))
+  if (!is.null(res$imq)) add("IM_awareness_vs_coverage", res$imq %>% transmute(Country = cname, Province = province, District = district, `Caregiver awareness %` = round(100 * awareness, 1), `IM coverage %` = round(100 * cv, 1), `Children missed` = missed, `IM rounds` = campaigns, Quadrant = as.character(quadrant)) %>% arrange(Quadrant, Country, District), c(22, 22, 26, 14, 12, 12, 9, 38))
   add("Indicator_results", res$long %>% transmute(Country = country, Response, Round = Round_Add, Date = date, Period = period, Pillar = pillar, Indicator = label, Standard = standard_text, Value = round(value, 1), Result = result), c(20, 34, 8, 12, 10, 18, 28, 60, 10, 9))
   add("Indicators", IND %>% transmute(ID = id, Pillar = pillar, Indicator = label, Standard = standard_text), c(8, 20, 30, 70))
   add("By_indicator_period", res$periods$ind %>% transmute(ID = id, Pillar = pillar, Indicator = label, Period = period, `Campaigns evaluated` = n, Met = met, `Share met %` = round(rate, 1)), c(8, 20, 30, 10, 12, 8, 12))
@@ -817,7 +930,7 @@ build_pptx <- function(res, file, chdir) {
   steps <- list(c("1 \u00B7 Group", sprintf("Administrative records dated %s are grouped by country, campaign and round; district lines are merged.", span)),
                 c("2 \u00B7 Measure", sprintf("%d standards across 3 areas: coverage, data reliability and LQAS verification.", nrow(IND))),
                 c("3 \u00B7 Test", "Each campaign is tested against every standard; thresholds are listed in the workbook."),
-                c("4 \u00B7 Flag", "Missing, implausible and mismatched values are counted, and unscorable campaigns remain on display."),
+                c("4 \u00B7 Flag", "Late reports, mismatched campaign codes and districts without LQAS are flagged, and unscorable campaigns remain on display."),
                 c("5 \u00B7 Track", "A country's trend compares its first and its latest scorable campaign, nothing else."),
                 c("6 \u00B7 Sort", "Countries fall into score bands and support groups through fixed rules, never by hand."))
   df <- data.frame(a = map_chr(steps[1:3], 2), b = "", stringsAsFactors = FALSE)
@@ -834,7 +947,7 @@ build_pptx <- function(res, file, chdir) {
     tbl_base(4.8) %>% flextable::bg(bg = "#FDECEE") %>% flextable::border_outer(border = brd("#F3C6CB")) %>% flextable::valign(valign = "center")
   cau <- flextable::width(cau, width = 4.8) %>% flextable::height(height = 0.95) %>% flextable::hrule(rule = "exact")
   x <- pp_add(x, cau, 8.05, 5.15, 4.8, 0.95)
-  x <- pp_txt(x, sprintf("Source: %s%s | Unit of analysis: campaign round | Period: %s", basename(res$admin_file), ifelse(is.null(res$lqas_file), "", paste0(" + ", basename(res$lqas_file))), span), 0.45, 6.35, 12.4, 0.35, 11, FALSE, COL$muted)
+  x <- pp_txt(x, sprintf("Source: %s%s%s | Unit of analysis: campaign round | Period: %s", basename(res$admin_file), ifelse(is.null(res$lqas_file), "", paste0(" + ", basename(res$lqas_file))), ifelse(is.null(res$scope_file), "", paste0(" + ", basename(res$scope_file))), span), 0.45, 6.35, 12.4, 0.35, 11, FALSE, COL$muted)
 
   # 3 --- four executive messages (slide-13 layout)
   x <- ns("Key takeaways for decision-makers", "What the data say about results, their causes and the risks ahead of the next rounds")
@@ -871,7 +984,7 @@ build_pptx <- function(res, file, chdir) {
   x <- pp_img(x, file.path(chdir, "02_trajectories.png"), 0.45, 1.6, 8.0, 4.9)
   x <- pp_add(x, ft_panel("Gains to protect", fmt_lines(head(imp, 6), function(r) list(label = paste0(r$country, " "), value = sprintf("%+d", as.integer(r$change)), col = COL$green)), COL$green, 4.3, 2.35), 8.6, 1.7, 4.3, 2.35)
   x <- pp_add(x, ft_panel("Slippage to reverse", fmt_lines(head(dec, 6), function(r) list(label = paste0(r$country, " "), value = sprintf("%+d", as.integer(r$change)), col = COL$red)), COL$red, 4.3, 2.35), 8.6, 4.2, 4.3, 2.35)
-  x <- pp_txt(x, sprintf("Unchanged: %s. Only one scorable campaign (no trend): %s.", list_names(nochg$country, 5), list_names(single$country, 6)), 0.45, 6.55, 8.0, 0.55, 11, FALSE, COL$muted)
+  x <- pp_txt(x, sprintf("Unchanged: %s. Only one scorable campaign (no trend): %s.", list_names(nochg$country, 5), list_names(single$country, 6)), 0.45, 6.4, 8.0, 0.5, 10, FALSE, COL$muted)
   x <- pp_add(x, ft_banner("Trend = score change between a country's first and latest scorable campaign in the period.", 12.4, 0.5, COL$navy, "white", 14), 0.45, 6.95, 12.4, 0.45)
 
   # 6 --- pillars (slide-7 layout)
@@ -920,6 +1033,32 @@ build_pptx <- function(res, file, chdir) {
     x <- pp_add(x, ft_banner("Countries with no bar have no LQAS result for that quarter in the LQAS file.", 3.8, 1.3, COL$orange, "white", 13), 9.1, 5.3, 3.8, 1.3)
   }
 
+  # 6c --- LQ4 refusals (shown, not scored)
+  rf <- latest_lqas_campaign(res$camp)
+  if (nrow(rf)) {
+    nok <- sum(rf$lq_noncomp <= CFG$noncomp_max); ntot <- nrow(rf); hi <- rf %>% arrange(desc(lq_noncomp)) %>% slice(1)
+    x <- ns("LQ4 \u00B7 Refusals under control", sprintf("Share of sampled children missed through refusal, latest campaign with LQAS (standard: at most %g%%)", CFG$noncomp_max))
+    x <- pp_img(x, file.path(chdir, "08_refusals_lq4.png"), 0.45, 1.6, 8.6, 5.0)
+    x <- pp_add(x, ft_tile(sprintf("%d / %d", nok, ntot), ifelse(nok == ntot, COL$green, COL$orange), "Countries within the standard", sprintf("refusals at most %g%% of sampled children", CFG$noncomp_max), 3.4, 1.55), 9.45, 1.7, 3.4, 1.55)
+    x <- pp_add(x, ft_tile(sprintf("%.1f%%", hi$lq_noncomp), ifelse(hi$lq_noncomp <= CFG$noncomp_max, COL$navy, COL$red), "Highest refusal rate", sprintf("%s, %s", hi$country, hi$Round_Add), 3.4, 1.55), 9.45, 3.45, 3.4, 1.55)
+    x <- pp_add(x, ft_banner(ifelse(nok == ntot, "Refusals are not a driver of missed children in these campaigns. Shown for information, not scored.", "Countries above the line need a refusal-resolution plan. Shown for information, not scored."), 3.4, 1.4, ifelse(nok == ntot, COL$green, COL$orange), "white", 12.5), 9.45, 5.2, 3.4, 1.4)
+    x <- pp_txt(x, "Refusal = children not vaccinated because of non-compliance in the LQAS sample, as a share of children sampled. Only the latest campaign with LQAS results is shown per country.", 0.45, 6.7, 12.4, 0.4, 10.5, FALSE, COL$muted)
+  }
+
+  # 6d --- IM: social mobilisation vs coverage (shown, not scored)
+  iq <- res$imq
+  if (!is.null(iq) && nrow(iq)) {
+    nq <- table(iq$quadrant); lowaw <- iq %>% filter(awareness < 0.80)
+    top <- lowaw %>% count(cname, sort = TRUE) %>% head(4)
+    x <- ns("IM data \u00B7 Social mobilisation vs coverage", sprintf("Caregiver awareness and monitored coverage by district, %s (%s districts)", span, comma(nrow(iq))))
+    x <- pp_img(x, file.path(chdir, "09_im_social_mobilisation_vs_coverage.png"), 0.45, 1.55, 8.7, 5.4)
+    x <- pp_add(x, ft_tile(pct(100 * nq[[4]] / nrow(iq), 0), COL$green, "High awareness + good coverage", sprintf("%s of %s districts", comma(nq[[4]]), comma(nrow(iq))), 3.5, 1.3), 9.4, 1.65, 3.5, 1.3)
+    x <- pp_add(x, ft_tile(comma(nq[[1]] + nq[[2]]), COL$orange, "Districts below 80% awareness", sprintf("%s also below 90%% coverage", comma(nq[[1]])), 3.5, 1.3), 9.4, 3.05, 3.5, 1.3)
+    x <- pp_add(x, ft_tile(comma(nq[[3]]), COL$purple, "High awareness but low coverage", "check operations and microplans", 3.5, 1.3), 9.4, 4.45, 3.5, 1.3)
+    x <- pp_txt(x, ifelse(nrow(top), paste0("Most low-awareness districts: ", paste0(top$cname, " (", top$n, ")", collapse = " \u00B7 ")), ""), 9.4, 5.85, 3.5, 0.6, 11, FALSE, COL$text)
+    x <- pp_add(x, ft_banner("Advocacy: intensify pre-campaign mobilisation where awareness is below 80%.", 12.4, 0.5, COL$navy, "white", 13), 0.45, 6.95, 12.4, 0.4)
+  }
+
   # 7 --- bands (slide-8 layout)
   bc <- table(factor(scored$band, levels = levels(scored$band))); bl <- levels(scored$band)
   x <- ns(ifelse(K$n_below >= 0.5 * K$n_countries_scored, "Latest results are still low in many countries", "Strong and weak performers are far apart"), sprintf("%d of %d countries scored under %d%% in their latest assessable campaign", K$n_below, K$n_countries_scored, CFG$bands[2]))
@@ -945,12 +1084,12 @@ build_pptx <- function(res, file, chdir) {
   x <- pp_img(x, file.path(chdir, "04_indicator_heatmap.png"), 0.8, 1.55, 11.7, 5.5)
 
   # 9 --- data quality
-  x <- ns("Reliable data come first", "Gaps and doubtful figures can hide poor results or flatter good ones")
+  x <- ns("Reliable data come first", "Late reports, mismatched codes and missing LQAS can hide poor results or flatter good ones")
   nea <- res$camp %>% filter(!small, !evaluable)
   x <- pp_add(x, ft_tile(K$n_campaigns, COL$navy, "Rounds in scope", sprintf("%d scorable, %d N/E", K$n_eval, K$n_ne), 2.6, 1.4), 0.45, 1.7, 2.6, 1.4)
   x <- pp_add(x, ft_tile(pct(100 * K$n_ne / max(1, K$n_campaigns), 1), COL$red, "N/E share", "campaigns not scored", 2.6, 1.4), 3.25, 1.7, 2.6, 1.4)
-  x <- pp_add(x, ft_tile(comma(K$n_missing), COL$orange, "District records incomplete", sprintf("of %s", comma(K$n_districts)), 2.6, 1.4), 0.45, 3.3, 2.6, 1.4)
-  x <- pp_add(x, ft_tile(comma(K$n_implaus), COL$orange, sprintf("Coverage above %d%%", CFG$cov_ceiling), "implausible figures", 2.6, 1.4), 3.25, 3.3, 2.6, 1.4)
+  x <- pp_add(x, ft_tile(ifelse(is.finite(K$med_delay_all), sprintf("%.0f d", K$med_delay_all), "n/a"), COL$orange, "Median report delay", sprintf("standard: %d days or less", CFG$delay_max_days), 2.6, 1.4), 0.45, 3.3, 2.6, 1.4)
+  x <- pp_add(x, ft_tile(ifelse(is.na(K$lq_scope_pct_all), "n/a", pct(K$lq_scope_pct_all, 0)), COL$orange, "LQAS reach", "of districts in scope have an LQAS result", 2.6, 1.4), 3.25, 3.3, 2.6, 1.4)
   x <- pp_img(x, file.path(chdir, "05_data_quality.png"), 6.2, 1.6, 6.7, 3.2)
   ne_txt <- if (nrow(nea)) paste0(nea$country, " (", nea$Round_Add, ", ", nea$month, ")", collapse = "  \u00B7  ") else "Every campaign could be scored."
   x <- pp_txt(x, "Campaigns that could not be scored", 0.45, 4.95, 8, 0.35, 14, TRUE, COL$navy)
@@ -979,7 +1118,7 @@ build_pptx <- function(res, file, chdir) {
     act <- map_chr(seq_len(nrow(pri)), function(i) {
       k <- paste(pri$Country[i], pri$latest_response[i], pri$latest_round[i], sep = "|")
       f <- res$long %>% filter(key == k, result == "No") %>% count(pillar) %>% left_join(count(IND, pillar, name = "tot"), by = "pillar") %>% mutate(share = n / tot) %>% arrange(desc(share), desc(n))
-      if (!nrow(f)) "Keep up the current performance" else str_to_sentence(ACTION_BY_PILLAR[[f$pillar[1]]])
+      if (!nrow(f)) "Keep up the current performance" else { a <- ACTION_BY_PILLAR[[f$pillar[1]]]; paste0(toupper(substr(a, 1, 1)), substr(a, 2, nchar(a))) }
     })
     df <- data.frame(a = "", b = pri$country, c = paste0(pri$latest_score, " %", ifelse(pri$latest_is_last, "", "*")), d = act, e = paste("Standards missed:", ifelse(nzchar(pri$failed), pri$failed, "none")), stringsAsFactors = FALSE)
     x <- pp_add(x, ft_rows(df, rep(pri_col, nrow(pri)), c(0.25, 1.9, 1.0, 4.6, 4.65), 0.95, sizes = c(14, 15, 12, 11)), 0.45, 1.65, 12.4, 0.95 * nrow(pri))
@@ -1003,18 +1142,20 @@ build_pptx <- function(res, file, chdir) {
   lq <- ifelse(is.na(K$lqas_max), "no LQAS data were found", sprintf("LQAS data end on %s; later campaigns have no LQAS result yet and are not penalised", format(K$lqas_max)))
   lim <- list(list(label = "Standards: ", value = "working defaults (workbook, sheet Standards) to be confirmed by the technical team", col = COL$navy),
               list(label = "Coverage: ", value = "administrative coverage, not an independent verification; co-administered vaccines are collapsed by district", col = COL$navy),
+              list(label = "LQAS conducted: ", value = sprintf("districts in the campaign scope (Scope file) compared with districts that have an LQAS result; threshold %d%% of districts is a working default to confirm", CFG$lqas_scope_min), col = COL$navy),
               list(label = "LQAS: ", value = lq, col = COL$navy),
+              list(label = "Shown, not scored: ", value = sprintf("LQ4 refusals (at most %g%% of sampled children) and the IM social-mobilisation view (awareness 80%%, coverage 90%%) inform the discussion but do not change the score", CFG$noncomp_max), col = COL$navy),
               list(label = "Comparisons: ", value = "quarters can include different countries and campaigns; changes are indicative", col = COL$navy),
-              list(label = "Not included: ", value = "end-of-campaign independent monitoring (no usable columns in the admin file), financing and microplan timeliness", col = COL$navy))
+              list(label = "Not included: ", value = "financing and microplan timeliness; IM results enter only through the awareness-vs-coverage view", col = COL$navy))
   x <- pp_add(x, ft_panel("What the score cannot tell you", lim, COL$navy, 12.4, 3.7, 0.45, 15), 0.45, 1.7, 12.4, 3.6)
-  x <- pp_txt(x, sprintf("Files: %s%s. Script: sia_executive_review.R. Generated %s.", basename(res$admin_file), ifelse(is.null(res$lqas_file), "", paste0(" + ", basename(res$lqas_file))), format(Sys.Date())), 0.45, 5.9, 12.4, 0.5, 11.5, FALSE, COL$muted)
+  x <- pp_txt(x, sprintf("Files: %s%s. Script: sia_executive_review.R. Generated %s.", basename(res$admin_file), paste0(ifelse(is.null(res$lqas_file), "", paste0(" + ", basename(res$lqas_file))), ifelse(is.null(res$scope_file), "", paste0(" + ", basename(res$scope_file))), ifelse(is.null(res$im_file), "", paste0(" + ", basename(res$im_file)))), format(Sys.Date())), 0.45, 5.9, 12.4, 0.5, 11.5, FALSE, COL$muted)
   print(x, target = file)
   invisible(file)
 }
 
 # ----------------------------------------------------------------------------- 11. MAIN
 run_sia_review <- function(admin_file = NULL, lqas_file = NULL, from = NULL, to = NULL, out_dir = NULL, title = NULL, zoom = NULL,
-                           make_pptx = TRUE, make_excel = TRUE) {
+                           make_pptx = TRUE, make_excel = TRUE, scope_file = NULL, im_file = NULL) {
   t0 <- Sys.time()
   if (!is.null(title)) CFG$title <<- title
   out_dir <- out_dir %||% CFG$out_dir
@@ -1044,12 +1185,18 @@ run_sia_review <- function(admin_file = NULL, lqas_file = NULL, from = NULL, to 
     lqas$key2 <- ifelse(is.na(lqas$key2), NA_character_, paste0("~", toupper(str_squish(lqas$lq_country)), "#", sub("^~", "", lqas$key2)))
     msg("LQAS file has country names: results are matched on country + campaign + round")
   }
+  scope_path <- find_input(scope_file %||% CFG$scope_file, c("Scope.rds"), dirs)
+  scope <- tryCatch(load_scope(scope_path), error = function(e) { msg("Scope file could not be read:", conditionMessage(e)); NULL })
+  msg("Scope file:", ifelse(is.na(scope_path) || is.null(scope), "not found: the districts of the admin file are used as scope", scope_path))
+  im_path <- find_input(im_file %||% CFG$im_file, c("AFRO_IM_data.rds"), dirs)
+  im <- tryCatch(load_im(im_path), error = function(e) { msg("IM file could not be read:", conditionMessage(e)); NULL })
+  msg("IM file   :", ifelse(is.na(im_path) || is.null(im), "not found: the IM slide is left out (use --im)", im_path))
   lqas_max <- if (!is.null(lqas) && nrow(lqas)) suppressWarnings(max(lqas$lqas_date, na.rm = TRUE)) else as.Date(NA)
   if (is.infinite(lqas_max)) lqas_max <- as.Date(NA)
 
   units <- build_units(adm, from, to)
   if (!nrow(units)) stop("No campaign with a date between ", from, " and ", to, " in the admin file.")
-  sc <- score_campaigns(units, lqas, prefixes, lqas_max)
+  sc <- score_campaigns(units, lqas, prefixes, lqas_max, scope)
   camp <- sc$camp; long <- sc$long
   ct <- country_table(camp, long); pt <- period_tables(camp, long)
   K <- make_key_numbers(camp, units, ct, pt, from, to, lqas_max, long)
@@ -1057,7 +1204,7 @@ run_sia_review <- function(admin_file = NULL, lqas_file = NULL, from = NULL, to 
   if (length(zoom) == 1 && grepl(",", zoom)) zoom <- trimws(strsplit(zoom, ",")[[1]])
   zoom <- trimws(zoom[nzchar(zoom)]); zoom <- unique(ifelse(toupper(zoom) %in% c("DRC", "CAR"), toupper(zoom), nice_country(toupper(zoom))))
   lt <- lqas_tables(lqas, camp, zoom, from, to)
-  res <- list(title = CFG$title, admin_file = admin_path, lqas_file = if (is.na(lqas_path)) NULL else lqas_path, K = K, camp = camp, long = long, units = units,
+  res <- list(title = CFG$title, admin_file = admin_path, lqas_file = if (is.na(lqas_path)) NULL else lqas_path, scope_file = if (is.na(scope_path) || is.null(scope)) NULL else scope_path, im_file = if (is.na(im_path) || is.null(im)) NULL else im_path, imq = im_quadrants(im, from, to), K = K, camp = camp, long = long, units = units,
               country = ct, periods = pt, messages = make_messages(K, ct, pt), decisions = make_decisions(ct, K), segments = segment_table(ct), lqas_t = lt, zoom = zoom, lqas_unmatched = NULL)
   msg(sprintf("%d campaign rounds (%d evaluable, %d N/E, %d too small) in %d countries", K$n_campaigns, K$n_eval, K$n_ne, K$n_small, K$n_countries))
 
@@ -1067,6 +1214,8 @@ run_sia_review <- function(admin_file = NULL, lqas_file = NULL, from = NULL, to 
   save_png(ch_pillar(pt), file.path(chdir, "03_indicators_by_period.png"), 7.6, 5.4)
   save_png(ch_heat(ct, long), file.path(chdir, "04_indicator_heatmap.png"), 11.7, max(4.5, 0.26 * K$n_countries_scored + 1.6))
   save_png(ch_dq(camp, long), file.path(chdir, "05_data_quality.png"), 6.7, 3.2)
+  save_png(ch_refusal(camp), file.path(chdir, "08_refusals_lq4.png"), 8.6, max(4.2, 0.26 * nrow(latest_lqas_campaign(camp)) + 1.4))
+  save_png(ch_im(res$imq), file.path(chdir, "09_im_social_mobilisation_vs_coverage.png"), 9.2, 5.6)
   save_png(ch_lqas_all(lt), file.path(chdir, "06_lqas_passed_all.png"), 8.6, 5)
   save_png(ch_lqas_zoom(lt, zoom), file.path(chdir, "07_lqas_passed_zoom.png"), 8.6, 5)
   msg("Charts written to", chdir)
@@ -1084,5 +1233,5 @@ run_sia_review <- function(admin_file = NULL, lqas_file = NULL, from = NULL, to 
 
 if (sys.nframe() == 0L) {
   a <- parse_args(commandArgs(trailingOnly = TRUE))
-  invisible(run_sia_review(admin_file = a$admin, lqas_file = a$lqas, from = a$from, to = a$to, out_dir = a$out, title = a$title, zoom = a$zoom))
+  invisible(run_sia_review(admin_file = a$admin, lqas_file = a$lqas, from = a$from, to = a$to, out_dir = a$out, title = a$title, zoom = a$zoom, scope_file = a$scope, im_file = a$im))
 }
