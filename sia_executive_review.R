@@ -1130,7 +1130,7 @@ build_pptx <- function(res, file, chdir) {
     x <- pp_img(x, file.path(chdir, "08_refusals_lq4.png"), 0.45, 1.6, 8.6, 5.0)
     x <- pp_add(x, ft_tile(sprintf("%d / %d", nok, ntot), ifelse(nok == ntot, COL$green, COL$orange), "Countries within the standard", sprintf("refusals at most %g%% of sampled children", CFG$noncomp_max), 3.4, 1.55), 9.45, 1.7, 3.4, 1.55)
     x <- pp_add(x, ft_tile(sprintf("%.1f%%", hi$lq_noncomp), ifelse(hi$lq_noncomp <= CFG$noncomp_max, COL$navy, COL$red), "Highest refusal rate", sprintf("%s, %s", hi$country, hi$Round_Add), 3.4, 1.55), 9.45, 3.45, 3.4, 1.55)
-    x <- pp_add(x, ft_banner(ifelse(nok == ntot, "Refusals are not a driver of missed children in these campaigns. Shown for information, not scored.", "Countries above the line need a refusal-resolution plan. Shown for information, not scored."), 3.4, 1.4, ifelse(nok == ntot, COL$green, COL$orange), "white", 12.5), 9.45, 5.2, 3.4, 1.4)
+    x <- pp_add(x, ft_banner(ifelse(nok == ntot, "Refusals are not a driver of missed children in these campaigns.", "Countries above the line need a refusal-resolution plan."), 3.4, 1.4, ifelse(nok == ntot, COL$green, COL$orange), "white", 12.5), 9.45, 5.2, 3.4, 1.4)
     x <- pp_txt(x, "Refusal = children not vaccinated because of non-compliance in the LQAS sample, as a share of children sampled. Only the latest campaign with LQAS results is shown per country.", 0.45, 6.7, 12.4, 0.4, 10.5, FALSE, COL$muted)
   }
 
