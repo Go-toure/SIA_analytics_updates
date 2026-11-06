@@ -9,7 +9,7 @@ No data is stored in this repository. Outputs are written to the output folder o
 ## Run
 
 ```
-Rscript sia_executive_review.R --from 2026-04-01 --to 2026-09-30 --zoom "Togo,Mali,Nigeria,Angola,Guinea"
+Rscript sia_executive_review.R --from 2026-04-01 --to 2026-09-30 --zoom "Togo,Mali,Nigeria,Angola,Guinea,South Sudan"
 ```
 
 Options: `--admin`, `--lqas` (input files), `--out` (output folder), `--from`, `--to`, `--zoom`, `--title`.

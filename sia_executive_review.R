@@ -58,7 +58,7 @@ CFG <- list(
   period_to      = NULL,
   default_months = 6,
   title          = "SIA Performance Analytics: Regional Overview",
-  zoom_countries = c("Togo", "Mali", "Nigeria", "Angola", "Guinea"),   # countries of the LQAS zoom chart
+  zoom_countries = c("Togo", "Mali", "Nigeria", "Angola", "Guinea", "South Sudan"),   # countries of the LQAS zoom chart
   org            = "WHO AFRO",
 
   # ---- standards (an indicator is met when its value reaches the standard) ----
@@ -422,7 +422,7 @@ ch_lqas_zoom <- function(lt, zoom) {
     geom_text(aes(label = lab, colour = is.na(rate)), position = position_dodge2(width = 0.8), vjust = -0.3, size = 3.2, lineheight = 0.95, show.legend = FALSE) +
     scale_colour_manual(values = c(`FALSE` = COL$text, `TRUE` = COL$muted)) + scale_fill_manual(values = cols) +
     scale_y_continuous(limits = c(0, 122), breaks = seq(0, 100, 25), labels = function(x) paste0(x, "%"), expand = c(0, 0)) +
-    labs(title = sprintf("Proportion of LQAS lots passed: %s", paste(zoom, collapse = ", "))) + theme_sia() +
+    labs(title = "Proportion of LQAS lots passed, selected countries") + theme_sia() +
     theme(panel.grid.major.y = element_line(colour = "#ECEFF3"), panel.grid.major.x = element_blank())
 }
 
@@ -908,12 +908,12 @@ build_pptx <- function(res, file, chdir) {
     } else x <- pp_add(x, ft_tile(sprintf("%d / %d", a_$accepted[1], a_$campaigns[1]), COL$navy, "Campaigns accepted", sprintf("\u2265%d%% of lots passed", CFG$lqas_pass_std), 3.4, 1.55), 9.45, 3.45, 3.4, 1.55)
     x <- pp_txt(x, sprintf("A lot passes LQAS when it meets the decision rule recorded in the LQAS file. Results are grouped by the quarter of the LQAS date; a campaign is accepted when at least %d%% of its lots pass. LQAS data end on %s.", CFG$lqas_pass_std, ifelse(is.na(K$lqas_max), "n/a", format(K$lqas_max))), 0.45, 6.75, 12.4, 0.5, 10.5, FALSE, COL$muted)
     zm <- res$zoom %||% CFG$zoom_countries; z_ <- lt$zoom
-    x <- ns(sprintf("LQAS zoom: %s", list_names(zm, 6)), sprintf("Proportion of LQAS lots passed, %s", paste(pp, collapse = " vs ")))
+    x <- ns(sprintf("LQAS zoom on %d countries", length(zm)), sprintf("%s: proportion of lots passed, %s", paste(zm, collapse = " \u00B7 "), paste(pp, collapse = " vs ")))
     x <- pp_img(x, file.path(chdir, "07_lqas_passed_zoom.png"), 0.45, 1.6, 8.6, 5.0)
     zl <- lapply(zm, function(cn_) {
       r <- z_ %>% filter(country == cn_) %>% arrange(period_key)
       if (!nrow(r)) return(list(label = paste0(cn_, ": "), value = "no LQAS result", col = COL$muted))
-      v <- paste(sprintf("%s %d%%", r$period, round(r$rate)), collapse = " \u2192 ")
+      v <- paste(sprintf("%s %d%%", sub(" [0-9]{4}$", "", r$period), round(r$rate)), collapse = " \u2192 ")
       list(label = paste0(cn_, ": "), value = v, col = COL$navy)
     })
     x <- pp_add(x, ft_panel("Lots passed by country", zl, COL$navy, 3.8, 3.4), 9.1, 1.7, 3.8, 3.4)
