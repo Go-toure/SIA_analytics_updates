@@ -911,8 +911,8 @@ card_png <- function(w, h, col, m = 0.16) {
   ragg::agg_png(f, width = W, height = H, units = "in", res = 200, background = "transparent")
   grid::grid.newpage(); u <- function(v) grid::unit(v, "in"); b <- 0.014
   grid::grid.roundrect(x = u(m + w / 2), y = u(m + h / 2), width = u(w), height = u(h), r = u(0.07), gp = grid::gpar(fill = "#DCE2DF", col = NA))
-  grid::grid.roundrect(x = u(m + w / 2), y = u(m + h / 2), width = u(w - 2 * b), height = u(h - 2 * b), r = u(0.065), gp = grid::gpar(fill = col, col = NA))
-  grid::grid.roundrect(x = u(m + w / 2), y = u(m + (h - 0.045) / 2), width = u(w - 2 * b), height = u(h - 2 * b - 0.045), r = u(0.065), gp = grid::gpar(fill = "white", col = NA))
+  grid::grid.roundrect(x = u(m + w / 2), y = u(m + h / 2), width = u(w - 2 * b), height = u(h - 2 * b), r = u(0.065), gp = grid::gpar(fill = mix_white(col, 0.45), col = NA))
+  grid::grid.roundrect(x = u(m + w / 2), y = u(m + (h - 0.028) / 2), width = u(w - 2 * b), height = u(h - 2 * b - 0.028), r = u(0.065), gp = grid::gpar(fill = "white", col = NA))
   grDevices::dev.off(); f
 }
 pp_add <- function(x, obj, l, t, w, h) {
