@@ -86,16 +86,16 @@ CFG <- list(
   trend_tol      = 2,               # points of change counted as "no change"
   weak_below     = 45,              # "persistently weak" = below this in both quarters
   change_flag    = 5,               # points of change that count as improving / worsening
-  min_districts  = 3,               # smaller campaign rounds are not scored (mop-ups)
+  min_districts  = 1,               # every campaign round is scored; raise it to leave small mop-up rounds out
 
   # ---- decisions ----
   days_validate  = "10 working days",
   days_plan      = "15 working days and before the next SIA round"
 )
 
-COL <- list(purple = "#7B3FA0", navy = "#1B3A5F", green = "#2E7D32", gold = "#D9A441", orange = "#C77700",
-            red = "#B00020", grey = "#B8C4D0", lightgrey = "#EEF2F6", text = "#1F2937",
-            muted = "#6B7280", blue = "#0F6CBD", teal = "#14808A")
+COL <- list(purple = "#7A5C99", navy = "#14454F", green = "#3D8B6E", gold = "#E3B23C", orange = "#D9622B",
+            red = "#B83B5E", grey = "#C9CDC3", lightgrey = "#F1F4EF", text = "#22313A",
+            muted = "#66737A", blue = "#2F7F9E", teal = "#2A9D8F")
 
 # ----------------------------------------------------------------------------- 2. INDICATORS
 IND <- tribble(
@@ -331,6 +331,24 @@ score_campaigns <- function(units, lqas, prefixes, lqas_max, scope = NULL) {
   # an LQAS result that ended before the campaign started cannot belong to it (the same campaign code is often reused)
   bad_lq <- !is.na(camp$lq_last) & camp$lq_last < camp$date - 14
   if (any(bad_lq)) { camp$lq_lots[bad_lq] <- NA; camp$lq_pass[bad_lq] <- NA; camp$lq_informed[bad_lq] <- NA; camp$lq_noncomp[bad_lq] <- NA; camp$lq_last[bad_lq] <- as.Date(NA); camp$lkey[bad_lq] <- NA_character_ }
+  # 3rd pass (campaigns still without LQAS): the LQAS of the same country that falls in the campaign window, either with the same round number
+  # (campaign code spelled differently) or with the same campaign code (round numbered differently). Never takes a group already linked to another campaign.
+  if (!is.null(lqas) && nrow(lqas)) {
+    claimed <- unique(na.omit(camp$lkey[!is.na(camp$lq_lots)]))
+    gq <- lqas %>% filter(!is.na(lqas_date)) %>% mutate(ctry = toupper(str_squish(lq_country)), rn = round_num(Round_Add), rs = norm_resp(Response)) %>%
+      group_by(ctry, key, rn, rs) %>% summarise(n = n(), first = min(lqas_date), last = max(lqas_date), .groups = "drop") %>% filter(!key %in% claimed)
+    for (i in which(is.na(camp$lq_lots))) {
+      cc <- gq %>% filter(ctry == toupper(str_squish(camp$Country[i])), first >= camp$date[i] - 14, first <= camp$date[i] + 90, last <= camp$date[i] + 120,
+                          rn %in% round_num(camp$Round_Add[i]) | rs == norm_resp(camp$Response[i])) %>%
+        mutate(pref = rn %in% round_num(camp$Round_Add[i])) %>% arrange(desc(pref), desc(n))
+      if (!nrow(cc)) next
+      m <- sumlq(lqas %>% filter(key == cc$key[1], !is.na(lqas_date), lqas_date >= camp$date[i] - 14), "key")
+      if (!nrow(m)) next
+      for (cn in lq_cols) camp[[cn]][i] <- m[[cn]][1]
+      camp$lkey[i] <- cc$key[1]
+      gq <- gq %>% filter(key != cc$key[1])
+    }
+  }
   # LQ1 : districts in scope compared with districts in LQAS
   rn_ <- round_num(camp$Round_Add); ym_ <- resp_ym(camp$Response)
   ld <- NULL
@@ -362,11 +380,13 @@ score_campaigns <- function(units, lqas, prefixes, lqas_max, scope = NULL) {
   yn <- function(ok, na) ifelse(na, "N/E", ifelse(ok, "Yes", "No"))
   res <- camp %>% transmute(
     key,
-    COV1 = yn(!is.na(share_ge95) & share_ge95 >= CFG$share_ge95_std, is.na(share_ge95)),
-    DQ1  = yn(!is.na(med_delay) & med_delay >= 0 & med_delay <= CFG$delay_max_days, report_share < CFG$report_min_share | is.na(med_delay)),
-    DQ2  = yn(isTRUE(code_ok) | code_ok %in% TRUE, is.na(code_ok)),
-    LQ1  = case_when(!is.na(lq_scope_pct) & lq_scope_pct >= CFG$lqas_scope_min ~ "Yes", is.na(lq_scope_pct) ~ "N/E", !lq_expected ~ "N/E", lq_unlinked ~ "N/E", TRUE ~ "No"),
-    LQ2  = yn(!is.na(lq_pass) & lq_pass >= CFG$lqas_pass_std, is.na(lq_pass)))
+    # the data are produced by the programme itself: a missing record means the step was not done, so it counts as "not met".
+    # Only an LQAS that cannot yet be due (campaign too recent for the LQAS data) stays N/E.
+    COV1 = ifelse(!is.na(share_ge95) & share_ge95 >= CFG$share_ge95_std, "Yes", "No"),
+    DQ1  = ifelse(!is.na(med_delay) & med_delay >= 0 & med_delay <= CFG$delay_max_days, "Yes", "No"),
+    DQ2  = ifelse(!(code_ok %in% FALSE), "Yes", "No"),
+    LQ1  = case_when(!is.na(lq_scope_pct) & lq_scope_pct >= CFG$lqas_scope_min ~ "Yes", is.na(lq_lots) & !lq_expected ~ "N/E", TRUE ~ "No"),
+    LQ2  = case_when(!is.na(lq_pass) ~ ifelse(lq_pass >= CFG$lqas_pass_std, "Yes", "No"), !lq_expected ~ "N/E", TRUE ~ "No"))
   vals <- camp %>% transmute(key, COV1 = share_ge95, DQ1 = med_delay, DQ2 = as.numeric(code_ok), LQ1 = lq_scope_pct, LQ2 = lq_pass)
   long <- res %>% pivot_longer(-key, names_to = "id", values_to = "result") %>%
     left_join(vals %>% pivot_longer(-key, names_to = "id", values_to = "value"), by = c("key", "id")) %>%
@@ -451,33 +471,30 @@ lqas_tables <- function(lqas, camp, zoom, from, to) {
 ch_lqas_all <- function(lt) {
   d <- lt$all; if (!length(lt$periods)) return(NULL)
   d <- d %>% mutate(period = factor(period, levels = lt$periods), none = lots == 0)
-  long <- bind_rows(
-    tibble(period = d$period, measure = "LQAS lots passed", rate = ifelse(d$none, 0, d$rate), none = d$none,
-           lab = ifelse(d$none, "no LQAS result", sprintf("%d%%\n(%s of %s lots)", round(d$rate), comma(d$passed), comma(d$lots)))),
-    tibble(period = d$period, measure = sprintf("Campaigns accepted (\u2265%d%% lots passed)", CFG$lqas_pass_std), rate = ifelse(d$none, 0, d$accepted_rate), none = d$none,
-           lab = ifelse(d$none, "no LQAS result", sprintf("%d%%\n(%d of %d campaigns)", round(d$accepted_rate), d$accepted, d$campaigns))))
+  long <- tibble(period = d$period, rate = ifelse(d$none, 0, d$rate), none = d$none,
+                 lab = ifelse(d$none, "no LQAS result", sprintf("%d%%\n(%s of %s districts)", round(d$rate), comma(d$passed), comma(d$lots))))
   cols <- setNames(c(COL$grey, COL$navy)[seq_along(lt$periods) + (2 - length(lt$periods))], lt$periods)
   ggplot(long, aes(period, rate, fill = period)) + geom_col(width = 0.62) +
     geom_text(aes(label = lab, colour = none), vjust = -0.3, size = 3.6, fontface = "bold", lineheight = 0.95) +
     scale_colour_manual(values = c(`FALSE` = COL$text, `TRUE` = COL$muted), guide = "none") +
-    facet_wrap(~ measure) + scale_fill_manual(values = cols, guide = "none") +
+    scale_fill_manual(values = cols, guide = "none") +
     scale_y_continuous(limits = c(0, 118), breaks = seq(0, 100, 25), labels = function(x) paste0(x, "%"), expand = c(0, 0)) +
-    labs(title = "Proportion of LQAS passed, all campaigns") + theme_sia() +
-    theme(strip.text = element_text(face = "bold", colour = COL$navy), panel.grid.major.y = element_line(colour = "#ECEFF3"), panel.grid.major.x = element_blank())
+    labs(title = "Proportion of LQAS districts passed, all campaigns") + theme_sia() +
+    theme(strip.text = element_text(face = "bold", colour = COL$navy), panel.grid.major.y = element_line(colour = "#E9EEEA"), panel.grid.major.x = element_blank())
 }
 
 ch_lqas_zoom <- function(lt, zoom) {
   d <- lt$zoom; if (!length(lt$periods)) return(NULL)
   grid <- expand.grid(country = zoom, period = lt$periods, stringsAsFactors = FALSE) %>% as_tibble() %>% left_join(d, by = c("country", "period"))
   grid <- grid %>% mutate(period = factor(period, levels = lt$periods), country = factor(country, levels = zoom),
-                          lab = ifelse(is.na(rate), "no\nLQAS", sprintf("%d%%\n(%d lots)", round(rate), lots)), y = ifelse(is.na(rate), 0, rate))
+                          lab = ifelse(is.na(rate), "no\nLQAS", sprintf("%d%%\nn=%d", round(rate), lots)), y = ifelse(is.na(rate), 0, rate))
   cols <- setNames(c(COL$grey, COL$navy)[seq_along(lt$periods) + (2 - length(lt$periods))], lt$periods)
   ggplot(grid, aes(country, y, fill = period, group = period)) + geom_col(position = position_dodge2(width = 0.8), width = 0.75) +
     geom_text(aes(label = lab, colour = is.na(rate), group = period), position = position_dodge2(width = 0.8), vjust = -0.3, size = 3.2, lineheight = 0.95, show.legend = FALSE) +
     scale_colour_manual(values = c(`FALSE` = COL$text, `TRUE` = COL$muted)) + scale_fill_manual(values = cols) +
     scale_y_continuous(limits = c(0, 122), breaks = seq(0, 100, 25), labels = function(x) paste0(x, "%"), expand = c(0, 0)) +
-    labs(title = "Proportion of LQAS lots passed, selected countries") + theme_sia() +
-    theme(panel.grid.major.y = element_line(colour = "#ECEFF3"), panel.grid.major.x = element_blank())
+    labs(title = "Proportion of LQAS districts passed, selected countries (n = districts tested)") + theme_sia() +
+    theme(panel.grid.major.y = element_line(colour = "#E9EEEA"), panel.grid.major.x = element_blank())
 }
 
 # ----------------------------------------------------------------------------- 6. CHARTS
@@ -488,7 +505,7 @@ theme_sia <- function(base = 12) {
           plot.caption = element_text(colour = COL$muted, size = base - 3, hjust = 0),
           axis.text = element_text(colour = COL$text), axis.title = element_blank(),
           panel.grid.major.y = element_blank(), panel.grid.minor = element_blank(),
-          panel.grid.major.x = element_line(colour = "#ECEFF3"), legend.position = "top",
+          panel.grid.major.x = element_line(colour = "#E9EEEA"), legend.position = "top",
           legend.title = element_blank(), plot.margin = margin(8, 14, 8, 8))
 }
 band_fill <- function(b) setNames(c(COL$red, COL$orange, COL$gold, COL$green), levels(b))
@@ -508,7 +525,7 @@ ch_trend <- function(ct) {
   lim <- max(abs(d$change), 10) * 1.2
   ggplot(d, aes(change, country, fill = dir)) + geom_col(width = 0.72) +
     geom_text(aes(label = sprintf("%+d", as.integer(change)), hjust = ifelse(dir, -0.2, 1.2)), fontface = "bold", colour = COL$text, size = 3.6) +
-    geom_vline(xintercept = 0, colour = "#9CA3AF") +
+    geom_vline(xintercept = 0, colour = "#9AA5A3") +
     scale_fill_manual(values = c(`TRUE` = COL$green, `FALSE` = COL$red), guide = "none") +
     scale_x_continuous(limits = c(-lim, lim)) +
     labs(title = "Score change between first and latest evaluable campaign (points)") + theme_sia()
@@ -530,14 +547,33 @@ ch_pillar <- function(pt) {
 
 ch_heat <- function(ct, long) {
   keys <- ct %>% filter(!is.na(latest_score)) %>% transmute(country, key = paste(Country, latest_response, latest_round, sep = "|"), latest_score)
-  d <- long %>% inner_join(keys, by = c("key", "country")) %>%
-    mutate(country = fct_reorder(country, latest_score), label = factor(label, levels = IND$label),
-           result = factor(result, levels = c("Yes", "No", "N/E")))
-  ggplot(d, aes(label, country, fill = result)) + geom_tile(colour = "white", linewidth = 0.8) +
-    scale_fill_manual(values = c(Yes = COL$green, No = COL$red, `N/E` = "#D1D5DB"), drop = FALSE) +
-    scale_x_discrete(position = "top", labels = function(x) str_wrap(x, 12)) +
-    labs(title = "Standards reached in each country's latest assessable campaign") +
-    theme_sia(10) + theme(axis.text.x = element_text(size = 8), panel.grid = element_blank())
+  d <- long %>% inner_join(keys, by = c("key", "country"))
+  # DQ2 is binary: it gets a panel only when at least one country fails it
+  keep <- IND$id[IND$id != "DQ2" | any(d$id == "DQ2" & d$result == "No")]
+  d <- d %>% filter(id %in% keep)
+  thr <- tibble(id = c("COV1", "DQ1", "LQ1", "LQ2", "DQ2"), thr = c(CFG$share_ge95_std, CFG$delay_max_days, CFG$lqas_scope_min, CFG$lqas_pass_std, 1))
+  cap <- 60
+  d <- d %>% left_join(thr, by = "id") %>% mutate(
+    label = factor(paste0(label, "\n", ifelse(id == "DQ1", sprintf("median days, target \u2264 %g", thr), ifelse(id == "DQ2", "1 = code matches country", sprintf("%%, target \u2265 %g", thr)))),
+                   levels = unique(paste0(IND$label[IND$id %in% keep], "\n", ifelse(IND$id[IND$id %in% keep] == "DQ1", sprintf("median days, target \u2264 %g", CFG$delay_max_days),
+                            ifelse(IND$id[IND$id %in% keep] == "DQ2", "1 = code matches country", sprintf("%%, target \u2265 %g", ifelse(IND$id[IND$id %in% keep] == "COV1", CFG$share_ge95_std, ifelse(IND$id[IND$id %in% keep] == "LQ1", CFG$lqas_scope_min, CFG$lqas_pass_std)))))))),
+    country = fct_reorder(country, latest_score), xv = ifelse(id == "DQ1", pmin(pmax(value, 0), cap), value),
+    cls = factor(result, levels = c("Yes", "No", "N/E")),
+    lab = ifelse(id == "DQ1", ifelse(value < 0, "date error", ifelse(value > cap, sprintf("> %d d", cap), sprintf("%.0f d", value))), ifelse(id == "DQ2", "", sprintf("%.0f%%", value))))
+  have <- d %>% filter(result != "N/E", !is.na(value))
+  ne <- d %>% filter(result == "N/E" | is.na(value))
+  ggplot() +
+    geom_segment(data = have, aes(x = 0, xend = xv, y = country, yend = country), colour = "#D3D8D2", linewidth = 0.9) +
+    geom_vline(data = d %>% distinct(label, thr), aes(xintercept = thr), colour = COL$navy, linetype = "dashed", linewidth = 0.6) +
+    geom_point(data = have, aes(xv, country, colour = cls), size = 3.6) +
+    geom_text(data = have, aes(xv, country, label = lab), hjust = -0.35, size = 2.7, colour = COL$text) +
+    geom_text(data = ne, aes(x = 0, y = country, label = "N/E"), hjust = -0.2, size = 2.6, colour = "#9AA5A3", fontface = "italic") +
+    facet_wrap(~label, nrow = 1, scales = "free_x") +
+    scale_colour_manual(values = c(Yes = COL$green, No = COL$red, `N/E` = "#D3D8D2"), breaks = c("Yes", "No"), labels = c("Standard met", "Standard missed")) +
+    scale_x_continuous(expand = expansion(mult = c(0.01, 0.2)), breaks = function(l) if (l[2] > 100) c(0, 25, 50, 75, 100) else pretty(l, 4)) +
+    labs(title = "Where each country stands on every standard, latest assessable campaign (dashed line = target)") +
+    theme_sia(10) + theme(strip.text = element_text(size = 8.5, face = "bold", colour = COL$navy, lineheight = 0.95), axis.text.x = element_text(size = 7.5),
+                          panel.grid.major.y = element_line(colour = "#EEF2EE"), panel.grid.major.x = element_line(colour = "#EEF2EE"), panel.spacing.x = grid::unit(0.9, "lines"))
 }
 
 ch_dq <- function(camp, long) {
@@ -572,7 +608,7 @@ ch_refusal <- function(camp) {
 
 # IM data: social mobilisation (caregiver awareness) vs coverage, one point per district (shown, not scored); same rules as the dashboard IM module
 IM_Q <- c("Low awareness + low coverage", "Low awareness but acceptable coverage", "High awareness but low coverage", "High awareness + good coverage")
-IM_COL <- c("Low awareness + low coverage" = "#C8553D", "Low awareness but acceptable coverage" = "#E8730A", "High awareness but low coverage" = "#9B59B6", "High awareness + good coverage" = "#005C97")
+IM_COL <- c("Low awareness + low coverage" = "#B83B5E", "Low awareness but acceptable coverage" = "#E08A3C", "High awareness but low coverage" = "#7A5C99", "High awareness + good coverage" = "#1F7A8C")
 im_quadrants <- function(im, from, to) {
   if (is.null(im) || !nrow(im)) return(NULL)
   d <- im %>% filter(!is.na(date), date >= from, date <= to) %>% mutate(aw_row = ifelse(!is.na(hh) & hh > 0, informed / hh, NA_real_))
@@ -592,11 +628,11 @@ ch_im <- function(s) {
                 txt = paste0(IM_Q, "\n", as.integer(n[IM_Q]), " areas"))
   s <- s %>% arrange(desc(missed))
   ggplot(s, aes(awareness, cv)) +
-    geom_vline(xintercept = 0.8, linetype = "dotted", colour = "#6B7280", linewidth = 0.7) + geom_hline(yintercept = 0.9, linetype = "dotted", colour = "#6B7280", linewidth = 0.7) +
+    geom_vline(xintercept = 0.8, linetype = "dotted", colour = "#66737A", linewidth = 0.7) + geom_hline(yintercept = 0.9, linetype = "dotted", colour = "#66737A", linewidth = 0.7) +
     geom_point(aes(size = missed, fill = quadrant), shape = 21, colour = "white", stroke = 0.4, alpha = 0.75) +
     geom_label(data = lab, aes(x, y, label = txt, colour = quadrant), fill = alpha("white", 0.85), size = 3.1, fontface = "bold", label.size = 0.4, label.r = grid::unit(0, "pt"), lineheight = 0.95, show.legend = FALSE) +
-    annotate("text", x = 0.795, y = 0.2, label = "Awareness threshold: 80%", angle = 90, hjust = 0.5, vjust = -0.4, size = 2.7, colour = "#6B7280") +
-    annotate("text", x = 0.85, y = 0.875, label = "CV target: 90%", size = 2.7, colour = "#6B7280") +
+    annotate("text", x = 0.795, y = 0.2, label = "Awareness threshold: 80%", angle = 90, hjust = 0.5, vjust = -0.4, size = 2.7, colour = "#66737A") +
+    annotate("text", x = 0.85, y = 0.875, label = "CV target: 90%", size = 2.7, colour = "#66737A") +
     scale_size_continuous(range = c(1.2, 7), guide = "none") +
     scale_fill_manual(values = IM_COL, drop = FALSE, guide = guide_legend(nrow = 2, override.aes = list(size = 4, alpha = 1))) +
     scale_colour_manual(values = IM_COL, guide = "none") +
@@ -604,7 +640,7 @@ ch_im <- function(s) {
     scale_y_continuous(limits = c(-0.02, 1.1), breaks = seq(0, 1, 0.2), labels = function(v) paste0(round(v * 100), "%"), expand = c(0, 0)) +
     labs(title = "Social mobilisation awareness vs vaccination coverage", x = "Caregiver awareness rate (%)", y = "Vaccination coverage, IM (%)",
          caption = "Advocacy message: low-awareness districts require intensified pre-campaign mobilisation") +
-    theme_sia() + theme(axis.title = element_text(colour = COL$muted), panel.grid.major.y = element_line(colour = "#ECEFF3"), legend.position = "bottom", plot.caption = element_text(hjust = 1))
+    theme_sia() + theme(axis.title = element_text(colour = COL$muted), panel.grid.major.y = element_line(colour = "#E9EEEA"), legend.position = "bottom", plot.caption = element_text(hjust = 1))
 }
 
 save_png <- function(p, file, w = 9, h = 6.2) {
@@ -616,7 +652,7 @@ save_png <- function(p, file, w = 9, h = 6.2) {
 # ----------------------------------------------------------------------------- 7. KEY NUMBERS, MESSAGES, DECISIONS
 ACTION_BY_PILLAR <- c(Coverage = "revisit under-vaccinated districts, strengthen supervision and step up community mobilisation",
                       `Data quality` = "report on time and keep the campaign code consistent with the country",
-                      `LQAS verification` = "schedule LQAS on time, revaccinate failed lots and record the follow-up")
+                      `LQAS verification` = "schedule LQAS on time, revaccinate failed districts and record the follow-up")
 
 list_names <- function(x, max = 12) {
   x <- as.character(x)
@@ -679,7 +715,7 @@ make_decisions <- function(ct, K) {
     Action = c(paste0("Clean up ", ifelse(K$n_ne > 0, sprintf("the %d campaign%s that cannot be scored and ", K$n_ne, ifelse(K$n_ne == 1, "", "s")), ""), sprintf("the %d LQAS result group%s that could not be linked to a campaign (%s)", K$n_lq_unlinked, ifelse(K$n_lq_unlinked == 1, "", "s"), ifelse(length(val), list_names(val, 6), "no country flagged"))),
                sprintf("Prepare a recovery plan for the %d countries under %d%% (%s)", length(below), CFG$bands[2], list_names(below, 6)),
                "Re-run this analysis every month to follow the open gaps",
-               "Confirm that failed LQAS lots were analysed and revaccinated"),
+               "Confirm that failed LQAS districts were analysed and revaccinated"),
     Owner = c("Countries", "Countries + AFRO", "AFRO", "Countries"),
     Timeline = c(CFG$days_validate, CFG$days_plan, "Monthly", "Before the following round"),
     Proof = c("Corrected dataset with a short note", "Plan naming the pillar, owner and deadline", "Monthly regional tracker", "Closure proof attached to the next review"))
@@ -709,7 +745,7 @@ write_workbook <- function(res, file) {
   readme <- tibble(Item = c("Title", "Period", "Data (admin)", "Data (LQAS)", "LQAS data end", "Campaign rounds", "Evaluable", "Not evaluable (N/E)", "Rounds too small to score", "Score", "Indicators", "Band", "Trend", "Segments", "Limits"),
     Description = c(res$title, paste(format(K$from), "to", format(K$to)), res$admin_file, res$lqas_file %||% "not found", ifelse(is.na(K$lqas_max), "n/a", format(K$lqas_max)),
       K$n_campaigns, K$n_eval, K$n_ne, K$n_small,
-      "Score = indicators met / indicators evaluable x 100 (equal weights). A campaign with fewer than the minimum number of evaluable indicators is N/E and is not scored.",
+      "Score = indicators met / indicators evaluable x 100 (equal weights). A missing record (coverage, report date, LQAS result) counts as not met; only an LQAS that cannot yet be due is N/E. Every campaign round is scored.",
       "See sheet Indicators: pillar, standard, and the number met / not met / N/E for every campaign in Indicator_results.",
       sprintf("Latest evaluable score: below %d%% | %d-%d%% | %d-%d%% | %d%% or above", CFG$bands[1], CFG$bands[1], CFG$bands[2] - 1, CFG$bands[2], CFG$bands[3] - 1, CFG$bands[3]),
       sprintf("First vs latest evaluable campaign; change within +/-%d points = No change", CFG$trend_tol),
@@ -722,7 +758,7 @@ write_workbook <- function(res, file) {
   add("Campaign_scores", res$camp %>% transmute(Country = country, Response, Round = Round_Add, Date = date, Period = period, Vaccine = vaccine, Districts = n_districts, Status = status, Score = score,
         `Indicators met` = n_yes, `Not met` = n_no, `N/E` = n_ne, Evidence = evidence, `Coverage %` = round(cov_total, 1), `Districts >= std %` = round(share_ge95, 1),
         `Districts < low %` = round(share_low, 1), `Complete %` = round(complete, 1), `Implausible %` = round(implaus, 1), `Median report delay (d)` = med_delay,
-        `Districts in scope` = lq_scope_n, `In scope with LQAS` = lq_scope_hit, `LQAS reach %` = round(lq_scope_pct, 1), `Scope source` = scope_src, `LQAS lots` = lq_lots, `LQAS pass %` = round(lq_pass, 1),
+        `Districts in scope` = lq_scope_n, `In scope with LQAS` = lq_scope_hit, `LQAS reach %` = round(lq_scope_pct, 1), `Scope source` = scope_src, `LQAS districts` = lq_lots, `LQAS pass %` = round(lq_pass, 1),
         `LQ4 refusal % (shown, not scored)` = round(lq_noncomp, 2), `LQ4 within standard` = ifelse(is.na(lq_noncomp), "N/E", ifelse(lq_noncomp <= CFG$noncomp_max, "Yes", "No"))), c(20, 34, 8, 12, 10, 16, 10, 22, 8, 9, 8, 6, 9, 10, 12, 12, 10, 11, 12, 11, 12, 11, 12, 9, 10, 16, 14))
   if (!is.null(res$imq)) add("IM_awareness_vs_coverage", res$imq %>% transmute(Country = cname, Province = province, District = district, `Caregiver awareness %` = round(100 * awareness, 1), `IM coverage %` = round(100 * cv, 1), `Children missed` = missed, `IM rounds` = campaigns, Quadrant = as.character(quadrant)) %>% arrange(Quadrant, Country, District), c(22, 22, 26, 14, 12, 12, 9, 38))
   add("Indicator_results", res$long %>% transmute(Country = country, Response, Round = Round_Add, Date = date, Period = period, Pillar = pillar, Indicator = label, Standard = standard_text, Value = round(value, 1), Result = result), c(20, 34, 8, 12, 10, 18, 28, 60, 10, 9))
@@ -730,9 +766,9 @@ write_workbook <- function(res, file) {
   add("By_indicator_period", res$periods$ind %>% transmute(ID = id, Pillar = pillar, Indicator = label, Period = period, `Campaigns evaluated` = n, Met = met, `Share met %` = round(rate, 1)), c(8, 20, 30, 10, 12, 8, 12))
   add("By_pillar_period", res$periods$pillar %>% transmute(Pillar = pillar, Period = period, `Indicator results` = n, Met = met, `Share met %` = round(rate, 1)), c(22, 10, 14, 8, 12))
   if (nrow(res$lqas_t$all)) {
-    add("LQAS_passed_all", res$lqas_t$all %>% transmute(Period = period, `LQAS lots` = lots, `Lots passed` = passed, `Lots passed %` = round(rate, 1), Campaigns = campaigns, `Campaigns accepted` = accepted, `Campaigns accepted %` = round(accepted_rate, 1)), c(12, 12, 12, 14, 12, 18, 20))
-    add("LQAS_by_campaign", res$lqas_t$by_campaign %>% transmute(Country = country, `Campaign code (LQAS file)` = Response, Round = Round_Add, Quarter = period, `LQAS lots` = lots, `Lots passed` = passed, `Lots passed %` = round(rate, 1), `Campaign accepted` = ifelse(accepted, "Yes", "No"), `First LQAS date` = as.character(first), `Last LQAS date` = as.character(last)), c(18, 36, 10, 12, 12, 12, 14, 16, 16, 16))
-    add("LQAS_passed_zoom", res$lqas_t$zoom %>% transmute(Country = country, Period = period, `LQAS lots` = lots, `Lots passed` = passed, `Lots passed %` = round(rate, 1), Campaigns = campaigns), c(20, 12, 12, 12, 14, 12))
+    add("LQAS_passed_all", res$lqas_t$all %>% transmute(Period = period, `LQAS districts` = lots, `Districts passed` = passed, `Districts passed %` = round(rate, 1), Campaigns = campaigns, `Campaigns accepted` = accepted, `Campaigns accepted %` = round(accepted_rate, 1)), c(12, 12, 12, 14, 12, 18, 20))
+    add("LQAS_by_campaign", res$lqas_t$by_campaign %>% transmute(Country = country, `Campaign code (LQAS file)` = Response, Round = Round_Add, Quarter = period, `LQAS districts` = lots, `Districts passed` = passed, `Districts passed %` = round(rate, 1), `Campaign accepted` = ifelse(accepted, "Yes", "No"), `First LQAS date` = as.character(first), `Last LQAS date` = as.character(last)), c(18, 36, 10, 12, 12, 12, 14, 16, 16, 16))
+    add("LQAS_passed_zoom", res$lqas_t$zoom %>% transmute(Country = country, Period = period, `LQAS districts` = lots, `Districts passed` = passed, `Districts passed %` = round(rate, 1), Campaigns = campaigns), c(20, 12, 12, 12, 14, 12))
   }
   add("Segments", res$segments %>% transmute(Segment = segment, Countries = n, List = map_chr(countries, ~ paste(.x, collapse = ", ")), Action = action), c(22, 10, 80, 60))
   dq <- tibble(Measure = c("District records", "Without target or vaccinated figure", sprintf("Coverage above %d%%", CFG$cov_ceiling), sprintf("Coverage below %d%%", CFG$cov_low), "Rounds scored", "Not evaluable (N/E)", "Evaluable with limited evidence", "Campaign code not matching the country", "Rounds too small to score", "Indicator results not met (gaps)"),
@@ -743,7 +779,7 @@ write_workbook <- function(res, file) {
   add("Decisions", res$decisions, c(90, 18, 40, 48))
   if (!is.null(res$lqas_unmatched) && nrow(res$lqas_unmatched)) add("LQAS_not_matched", res$lqas_unmatched)
   add("Standards", tibble(Setting = names(CFG)[map_lgl(CFG, ~ is.numeric(.x) && length(.x) == 1)], Value = unlist(CFG[map_lgl(CFG, ~ is.numeric(.x) && length(.x) == 1)])), c(24, 12))
-  cs <- createStyle(bgFill = "#F8D7DA"); cg <- createStyle(bgFill = "#D8EBD9")
+  cs <- createStyle(bgFill = "#F6D9E0"); cg <- createStyle(bgFill = "#D6EBE0")
   for (sh in c("Country_summary", "Campaign_scores")) {
     col <- if (sh == "Country_summary") 2 else 9
     conditionalFormatting(wb, sh, cols = col, rows = 2:2000, rule = paste0("AND(ISNUMBER(", int2col(col), "2),", int2col(col), "2<", CFG$bands[2], ")"), style = cs)
@@ -757,27 +793,27 @@ write_narrative <- function(res, html_file, md_file) {
   K <- res$K; ct <- res$country; msgs <- res$messages
   span <- sprintf("%s – %s", format(K$from, "%b %Y"), format(K$to, "%b %Y"))
   esc <- function(x) htmltools::htmlEscape(x)
-  tile <- function(big, label, sub, col = COL$navy) sprintf('<div style="flex:1;min-width:150px;border:1px solid #D9E0E8;border-radius:10px;padding:12px 16px;background:#fff"><div style="font-size:28px;font-weight:800;color:%s">%s</div><div style="font-weight:700;color:#1F2937">%s</div><div style="color:#6B7280;font-size:13px">%s</div></div>', col, esc(big), esc(label), esc(sub))
+  tile <- function(big, label, sub, col = COL$navy) sprintf('<div style="flex:1;min-width:150px;border:1px solid #D5DDD8;border-radius:10px;padding:12px 16px;background:#fff"><div style="font-size:28px;font-weight:800;color:%s">%s</div><div style="font-weight:700;color:#22313A">%s</div><div style="color:#66737A;font-size:13px">%s</div></div>', col, esc(big), esc(label), esc(sub))
   mb <- K$mean_by
   tiles <- paste0(
     tile(pct(K$mean_score, 1), "Average campaign score", sprintf("%d assessable campaigns", K$n_eval)),
     if (nrow(mb) >= 2) tile(pct(mb$mean[2], 1), sprintf("%s mean score", mb$period[2]), sprintf("vs %s in %s", pct(mb$mean[1], 1), mb$period[1])) else "",
     tile(K$n_campaigns, "Rounds scored", sprintf("%d countries", K$n_countries)),
     tile(K$n_ne, "Campaigns left unscored", ifelse(K$n_ne == 0, "all evaluable", "to complete or justify"), COL$red))
-  cards <- paste0(map_chr(seq_along(msgs), function(i) sprintf('<div style="flex:1 1 45%%;min-width:260px;background:#EEF2F6;border:1px solid #D9E0E8;border-radius:10px;padding:12px 16px"><div style="font-weight:800;color:%s">%d &nbsp; %s</div><div style="color:#1F2937;margin-top:4px">%s</div></div>', COL$navy, i, esc(msgs[[i]]$title), esc(msgs[[i]]$body))), collapse = "")
+  cards <- paste0(map_chr(seq_along(msgs), function(i) sprintf('<div style="flex:1 1 45%%;min-width:260px;background:#F1F4EF;border:1px solid #D5DDD8;border-radius:10px;padding:12px 16px"><div style="font-weight:800;color:%s">%d &nbsp; %s</div><div style="color:#22313A;margin-top:4px">%s</div></div>', COL$navy, i, esc(msgs[[i]]$title), esc(msgs[[i]]$body))), collapse = "")
   rows <- paste0(map_chr(seq_len(nrow(ct %>% filter(!is.na(latest_score)))), function(i) {
     r <- ct %>% filter(!is.na(latest_score)) %>% arrange(desc(latest_score)) %>% slice(i)
     sprintf('<tr><td>%s</td><td style="text-align:right;font-weight:700;color:%s">%s</td><td>%s</td><td>%s</td><td>%s</td></tr>', esc(r$country), band_colour(r$band), paste0(r$latest_score, "%"), esc(r$trend), esc(r$segment), esc(r$failed))
   }), collapse = "")
   dec <- paste0(map_chr(seq_len(nrow(res$decisions)), function(i) with(res$decisions[i, ], sprintf("<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>", esc(Action), esc(Owner), esc(Timeline), esc(Proof)))), collapse = "")
-  html <- sprintf('<div style="font-family:Segoe UI,Arial,sans-serif;color:#1F2937;max-width:1100px">
-<h2 style="color:%s;margin:0">%s</h2><div style="color:#6B7280;margin-bottom:12px">%s | %s | %d countries | %d campaign rounds</div>
+  html <- sprintf('<div style="font-family:Segoe UI,Arial,sans-serif;color:#22313A;max-width:1100px">
+<h2 style="color:%s;margin:0">%s</h2><div style="color:#66737A;margin-bottom:12px">%s | %s | %d countries | %d campaign rounds</div>
 <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px">%s</div>
 <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px">%s</div>
 <h3 style="color:%s">Latest scorable campaign by country</h3>
 <table style="border-collapse:collapse;width:100%%" border="0" cellpadding="5"><tr style="background:%s;color:#fff"><th align="left">Country</th><th align="right">Score</th><th align="left">Trend</th><th align="left">Segment</th><th align="left">Indicators not met</th></tr>%s</table>
 <h3 style="color:%s">Commitments</h3><table style="border-collapse:collapse;width:100%%" border="0" cellpadding="5"><tr style="background:%s;color:#fff"><th align="left">Action</th><th align="left">Owner</th><th align="left">Timeline</th><th align="left">Proof</th></tr>%s</table>
-<p style="color:#6B7280;font-size:12px">Score = standards met / standards assessable x 100. Standards are working defaults (see the Standards sheet of the workbook). Source: AFRO administrative data%s.</p></div>',
+<p style="color:#66737A;font-size:12px">Score = standards met / standards assessable x 100. Standards are working defaults (see the Standards sheet of the workbook). Source: AFRO administrative data%s.</p></div>',
     COL$navy, esc(res$title), esc(CFG$org), esc(span), K$n_countries, K$n_campaigns, tiles, cards, COL$navy, COL$navy, rows, COL$navy, COL$navy, dec,
     ifelse(is.null(res$lqas_file), "", " and LQAS data"))
   writeLines(html, html_file, useBytes = TRUE)
@@ -796,7 +832,7 @@ FONT  <- "Segoe UI"   # body text
 SERIF <- "Georgia"    # titles and big numbers
 fpt <- function(size = 14, bold = FALSE, col = COL$text, italic = FALSE, font = FONT) officer::fp_text(font.size = size, bold = bold, color = col, italic = italic, font.family = font)
 ch  <- function(txt, size = 14, bold = FALSE, col = COL$text, italic = FALSE, font = FONT) flextable::as_chunk(txt, props = fpt(size, bold, col, italic, font))
-brd <- function(col = "#D9E0E8", w = 1) officer::fp_border(color = col, width = w)
+brd <- function(col = "#D5DDD8", w = 1) officer::fp_border(color = col, width = w)
 
 make_template_169 <- function() {
   tpl <- system.file("template", "template.pptx", package = "officer")
@@ -848,7 +884,7 @@ ft_panel <- function(header, lines, col, w, h, hh = 0.4, size = 13) {
 }
 
 # rows: data.frame(bar, c1, c2, c3, c4) ; widths in inches
-ft_rows <- function(df, colours, widths, h, sizes = c(13, 11, 13, 12), row_bg = c("#EAF1F5", "#F3F6FA")) {
+ft_rows <- function(df, colours, widths, h, sizes = c(13, 11, 13, 12), row_bg = c("#E7F0EE", "#F2F6F3")) {
   ft <- flextable::flextable(df) %>% flextable::delete_part("header")
   n <- nrow(df)
   for (i in seq_len(n)) {
@@ -889,8 +925,8 @@ bg_title_png <- function(file) {
   d <- tibble(x = runif(n, 0, 16), y = runif(n, 0, 9), s = runif(n, 2, 14), a = runif(n, 0.05, 0.22))
   g <- expand.grid(x = seq(0, 16, length.out = 240), y = seq(0, 9, length.out = 140)); g$v <- g$x / 16 * 0.5 + g$y / 9 * 0.5
   p <- ggplot() + geom_raster(data = g, aes(x, y, fill = v), interpolate = TRUE) +
-    scale_fill_gradient(low = "#0F2A47", high = "#1F5D9A", guide = "none") +
-    geom_point(data = d, aes(x, y, size = s, alpha = a), colour = "#7FB2E5", show.legend = FALSE) + scale_size_identity() +
+    scale_fill_gradient(low = "#0C2E36", high = "#1F6F78", guide = "none") +
+    geom_point(data = d, aes(x, y, size = s, alpha = a), colour = "#7FC4BA", show.legend = FALSE) + scale_size_identity() +
     coord_cartesian(xlim = c(0, 16), ylim = c(0, 9), expand = FALSE) + theme_void()
   ragg::agg_png(file, width = 13.333, height = 7.5, units = "in", res = 110); print(p); dev.off()
 }
@@ -901,7 +937,7 @@ circles_png <- function(counts, labels, share, cols, file) {
     geom_text(aes(1.75, y, label = lab), hjust = 0, size = 6, colour = COL$text) +
     geom_text(aes(5.3, y, label = sh), hjust = 1, size = 4.2, colour = COL$muted) +
     scale_x_continuous(limits = c(0, 5.4), expand = c(0, 0)) + scale_y_continuous(limits = c(0.4, length(counts) + 0.6)) + theme_void() +
-    theme(plot.background = element_rect(fill = "#F3F6FA", colour = "#D9E0E8", linewidth = 1))
+    theme(plot.background = element_rect(fill = "#F2F6F3", colour = "#D5DDD8", linewidth = 1))
   ragg::agg_png(file, width = 4.9, height = 4.75, units = "in", res = 200); print(p); dev.off()
 }
 
@@ -920,9 +956,9 @@ build_pptx <- function(res, file, chdir) {
   tf <- tempfile(fileext = ".png"); bg_title_png(tf)
   x <- officer::add_slide(x, layout = "Blank", master = "Office Theme"); n <- n + 1
   x <- pp_img(x, tf, 0, 0, 13.333, 7.5)
-  x <- pp_txt(x, header, 0.9, 1.7, 11.5, 0.4, 14, FALSE, "#BFD7EE", italic = TRUE)
+  x <- pp_txt(x, header, 0.9, 1.7, 11.5, 0.4, 14, FALSE, "#BDE0DC", italic = TRUE)
   x <- pp_txt(x, CFG$title, 0.9, 2.2, 11.5, 1.8, 38, TRUE, "white", font = SERIF)
-  x <- pp_txt(x, "Scores, trends, data reliability, priorities and next steps by country", 0.9, 4.15, 11.5, 0.5, 18, FALSE, "#DCE9F7")
+  x <- pp_txt(x, "Scores, trends, data reliability, priorities and next steps by country", 0.9, 4.15, 11.5, 0.5, 18, FALSE, "#D7ECEA")
   x <- pp_txt(x, sprintf("%s | %d countries | %d campaign rounds scored", span, K$n_countries, K$n_campaigns), 0.9, 6.3, 11.5, 0.4, 15, FALSE, "white")
 
   # 2 --- method
@@ -936,15 +972,15 @@ build_pptx <- function(res, file, chdir) {
   df <- data.frame(a = map_chr(steps[1:3], 2), b = "", stringsAsFactors = FALSE)
   card_tbl <- function(st) { ft <- flextable::flextable(data.frame(a = "", b = "", c = "")) %>% flextable::delete_part("header")
     for (j in 1:3) ft <- flextable::compose(ft, j = j, value = flextable::as_paragraph(ch(st[[j]][1], 13, TRUE, COL$navy), ch(paste0("\n", st[[j]][2]), 12, FALSE, COL$text)))
-    ft <- ft %>% flextable::border_remove() %>% flextable::set_table_properties(layout = "fixed") %>% flextable::bg(bg = "#EEF3F8") %>% flextable::valign(valign = "center") %>%
+    ft <- ft %>% flextable::border_remove() %>% flextable::set_table_properties(layout = "fixed") %>% flextable::bg(bg = "#EDF3F0") %>% flextable::valign(valign = "center") %>%
       flextable::padding(padding.left = 12, padding.right = 12, padding.top = 8) %>% flextable::border_inner_v(border = brd("white", 8))
     ft <- flextable::width(ft, width = 4.1) %>% flextable::height(height = 1.45) %>% flextable::hrule(rule = "exact"); ft }
   x <- pp_add(x, card_tbl(steps[1:3]), 0.45, 1.75, 12.4, 1.45)
   x <- pp_add(x, card_tbl(steps[4:6]), 0.45, 3.35, 12.4, 1.45)
   x <- pp_add(x, ft_banner(sprintf("SCORE = standards met ÷ standards assessable × 100"), 7.4, 0.95, COL$navy, "white", 17), 0.45, 5.15, 7.4, 0.95)
   cau <- flextable::flextable(data.frame(a = "")) %>% flextable::delete_part("header") %>%
-    flextable::compose(j = 1, value = flextable::as_paragraph(ch("Scoring safeguards", 11, TRUE, COL$red), ch(sprintf("\nStandards that cannot be assessed are dropped from the denominator. A campaign with fewer than %d assessable standards is marked N/E and left unscored, as is any round with fewer than %d districts. Scores are shown as whole numbers.", CFG$min_evaluable, CFG$min_districts), 11, FALSE, COL$text))) %>%
-    tbl_base(4.8) %>% flextable::bg(bg = "#FDECEE") %>% flextable::border_outer(border = brd("#F3C6CB")) %>% flextable::valign(valign = "center")
+    flextable::compose(j = 1, value = flextable::as_paragraph(ch("Scoring safeguards", 11, TRUE, COL$red), ch(sprintf("\nThe data come from the programme's own systems, so a missing record counts as not met. Only an LQAS that cannot yet be due (campaign too recent for the LQAS data) is dropped from the denominator. Every round is scored; scores are whole numbers."), 11, FALSE, COL$text))) %>%
+    tbl_base(4.8) %>% flextable::bg(bg = "#FBEAEE") %>% flextable::border_outer(border = brd("#EFC2CE")) %>% flextable::valign(valign = "center")
   cau <- flextable::width(cau, width = 4.8) %>% flextable::height(height = 0.95) %>% flextable::hrule(rule = "exact")
   x <- pp_add(x, cau, 8.05, 5.15, 4.8, 0.95)
   x <- pp_txt(x, sprintf("Source: %s%s%s | Unit of analysis: campaign round | Period: %s", basename(res$admin_file), ifelse(is.null(res$lqas_file), "", paste0(" + ", basename(res$lqas_file))), ifelse(is.null(res$scope_file), "", paste0(" + ", basename(res$scope_file))), span), 0.45, 6.35, 12.4, 0.35, 11, FALSE, COL$muted)
@@ -962,7 +998,7 @@ build_pptx <- function(res, file, chdir) {
     ft <- flextable::flextable(data.frame(a = "", b = "")) %>% flextable::delete_part("header") %>%
       flextable::compose(j = 1, value = flextable::as_paragraph(ch(as.character(i), 18, TRUE, "white"))) %>%
       flextable::compose(j = 2, value = flextable::as_paragraph(ch(msgs[[i]]$title, 15, TRUE, COL$navy), ch(paste0("\n", msgs[[i]]$body), 12, FALSE, COL$text))) %>%
-      flextable::border_remove() %>% flextable::set_table_properties(layout = "fixed") %>% flextable::bg(j = 1, bg = cc[i]) %>% flextable::bg(j = 2, bg = ifelse(i %% 2 == 1, "#EAF1F5", "#F3F6FA")) %>%
+      flextable::border_remove() %>% flextable::set_table_properties(layout = "fixed") %>% flextable::bg(j = 1, bg = cc[i]) %>% flextable::bg(j = 2, bg = ifelse(i %% 2 == 1, "#E7F0EE", "#F2F6F3")) %>%
       flextable::align(j = 1, align = "center") %>% flextable::valign(valign = "center") %>% flextable::padding(padding.left = 10, padding.right = 10)
     ft <- flextable::width(ft, j = 1, width = 0.6) %>% flextable::width(j = 2, width = 5.4) %>% flextable::height(height = 1.55) %>% flextable::hrule(rule = "exact")
     x <- pp_add(x, ft, 0.45 + ((i - 1) %% 2) * 6.2, 3.55 + ((i - 1) %/% 2) * 1.72, 6.0, 1.55)
@@ -1007,21 +1043,21 @@ build_pptx <- function(res, file, chdir) {
   lt <- res$lqas_t
   if (length(lt$periods)) {
     a_ <- lt$all; pp <- lt$periods
-    x <- ns(sprintf("LQAS: proportion passed, %s", paste(pp, collapse = " vs ")), "Share of LQAS lots passed and of campaigns accepted, all campaigns with LQAS results")
+    x <- ns(sprintf("LQAS: proportion passed, %s", paste(pp, collapse = " vs ")), "Share of LQAS districts passed, all campaigns with LQAS results")
     x <- pp_img(x, file.path(chdir, "06_lqas_passed_all.png"), 0.45, 1.6, 8.6, 5.0)
     big <- function(i) if (i <= nrow(a_) && a_$lots[i] > 0) pct(a_$rate[i]) else "n/a"
     if (all(a_$lots == 0)) {
       x <- pp_add(x, ft_banner(sprintf("No LQAS result in the LQAS file for %s. LQAS data end on %s. Add the recent LQAS file (--lqas) and rerun to fill this slide.", paste(pp, collapse = " and "), ifelse(is.na(K$lqas_max), "n/a", format(K$lqas_max))), 3.4, 3.4, COL$orange, "white", 14), 9.45, 1.7, 3.4, 3.4)
     } else
-    x <- pp_add(x, ft_tile(big(nrow(a_)), COL$navy, sprintf("Lots passed in %s", a_$period[nrow(a_)]), sprintf("%s of %s lots", comma(a_$passed[nrow(a_)]), comma(a_$lots[nrow(a_)])), 3.4, 1.55), 9.45, 1.7, 3.4, 1.55)
+    x <- pp_add(x, ft_tile(big(nrow(a_)), COL$navy, sprintf("Districts passed in %s", a_$period[nrow(a_)]), sprintf("%s of %s districts", comma(a_$passed[nrow(a_)]), comma(a_$lots[nrow(a_)])), 3.4, 1.55), 9.45, 1.7, 3.4, 1.55)
     if (all(a_$lots == 0)) NULL else if (nrow(a_) >= 2) {
       dlt <- if (all(a_$lots > 0)) a_$rate[2] - a_$rate[1] else NA_real_
-      x <- pp_add(x, ft_tile(big(1), COL$muted, sprintf("Lots passed in %s", a_$period[1]), sprintf("%s of %s lots", comma(a_$passed[1]), comma(a_$lots[1])), 3.4, 1.55), 9.45, 3.45, 3.4, 1.55)
-      x <- pp_add(x, ft_tile(ifelse(is.na(dlt), "n/a", sprintf("%+.1f pts", dlt)), ifelse(is.na(dlt), COL$muted, ifelse(dlt >= 0, COL$green, COL$red)), "Change in lots passed", sprintf("%s to %s", a_$period[1], a_$period[2]), 3.4, 1.55), 9.45, 5.2, 3.4, 1.55)
-    } else x <- pp_add(x, ft_tile(sprintf("%d / %d", a_$accepted[1], a_$campaigns[1]), COL$navy, "Campaigns accepted", sprintf("\u2265%d%% of lots passed", CFG$lqas_pass_std), 3.4, 1.55), 9.45, 3.45, 3.4, 1.55)
-    x <- pp_txt(x, sprintf("A lot passes LQAS when it meets the decision rule recorded in the LQAS file. Results are grouped by the quarter of the LQAS date; a campaign is accepted when at least %d%% of its lots pass. LQAS data end on %s.", CFG$lqas_pass_std, ifelse(is.na(K$lqas_max), "n/a", format(K$lqas_max))), 0.45, 6.75, 12.4, 0.5, 10.5, FALSE, COL$muted)
+      x <- pp_add(x, ft_tile(big(1), COL$muted, sprintf("Districts passed in %s", a_$period[1]), sprintf("%s of %s districts", comma(a_$passed[1]), comma(a_$lots[1])), 3.4, 1.55), 9.45, 3.45, 3.4, 1.55)
+      x <- pp_add(x, ft_tile(ifelse(is.na(dlt), "n/a", sprintf("%+.1f pts", dlt)), ifelse(is.na(dlt), COL$muted, ifelse(dlt >= 0, COL$green, COL$red)), "Change in districts passed", sprintf("%s to %s", a_$period[1], a_$period[2]), 3.4, 1.55), 9.45, 5.2, 3.4, 1.55)
+    }
+    x <- pp_txt(x, sprintf("A district passes LQAS when it meets the decision rule recorded in the LQAS file. Results are grouped by the quarter of the LQAS date. LQAS data end on %s.", ifelse(is.na(K$lqas_max), "n/a", format(K$lqas_max))), 0.45, 6.75, 12.4, 0.5, 10.5, FALSE, COL$muted)
     zm <- res$zoom %||% CFG$zoom_countries; z_ <- lt$zoom
-    x <- ns(sprintf("LQAS zoom on %d countries", length(zm)), sprintf("%s: proportion of lots passed, %s", paste(zm, collapse = " \u00B7 "), paste(pp, collapse = " vs ")))
+    x <- ns(sprintf("LQAS zoom on %d countries", length(zm)), sprintf("%s: proportion of districts passed, %s", paste(zm, collapse = " \u00B7 "), paste(pp, collapse = " vs ")))
     x <- pp_img(x, file.path(chdir, "07_lqas_passed_zoom.png"), 0.45, 1.6, 8.6, 5.0)
     zl <- lapply(zm, function(cn_) {
       r <- z_ %>% filter(country == cn_) %>% arrange(period_key)
@@ -1029,7 +1065,7 @@ build_pptx <- function(res, file, chdir) {
       v <- paste(sprintf("%s %d%%", sub(" [0-9]{4}$", "", r$period), round(r$rate)), collapse = " \u2192 ")
       list(label = paste0(cn_, ": "), value = v, col = COL$navy)
     })
-    x <- pp_add(x, ft_panel("Lots passed by country", zl, COL$navy, 3.8, 3.4), 9.1, 1.7, 3.8, 3.4)
+    x <- pp_add(x, ft_panel("Districts passed by country", zl, COL$navy, 3.8, 3.4), 9.1, 1.7, 3.8, 3.4)
     x <- pp_add(x, ft_banner("Countries with no bar have no LQAS result for that quarter in the LQAS file.", 3.8, 1.3, COL$orange, "white", 13), 9.1, 5.3, 3.8, 1.3)
   }
 
@@ -1062,7 +1098,7 @@ build_pptx <- function(res, file, chdir) {
   # 7 --- bands (slide-8 layout)
   bc <- table(factor(scored$band, levels = levels(scored$band))); bl <- levels(scored$band)
   x <- ns(ifelse(K$n_below >= 0.5 * K$n_countries_scored, "Latest results are still low in many countries", "Strong and weak performers are far apart"), sprintf("%d of %d countries scored under %d%% in their latest assessable campaign", K$n_below, K$n_countries_scored, CFG$bands[2]))
-  cf <- tempfile(fileext = ".png"); circles_png(as.integer(bc), c("Critical", "Serious", "Watch", "On track"), sprintf("%d%% of countries", round(100 * as.integer(bc) / max(1, K$n_countries_scored))), c(COL$red, "#B8651B", "#C9A45C", COL$green), cf)
+  cf <- tempfile(fileext = ".png"); circles_png(as.integer(bc), c("Critical", "Serious", "Watch", "On track"), sprintf("%d%% of countries", round(100 * as.integer(bc) / max(1, K$n_countries_scored))), c(COL$red, "#C25B24", "#D4A94F", COL$green), cf)
   x <- pp_img(x, cf, 0.45, 1.65, 4.9, 4.75)
   names_b <- c(paste("Below", CFG$bands[1], "%"), bl[2], bl[3], paste(CFG$bands[3], "% or above"))
   lists_b <- map_chr(1:4, function(.x) { sel <- scored[scored$band == bl[.x], ]; list_names(sel$country[order(-sel$latest_score)], 9) })
@@ -1073,14 +1109,14 @@ build_pptx <- function(res, file, chdir) {
     ft <- flextable::compose(ft, i = i, j = 3, value = flextable::as_paragraph(ch(lists_b[i], 14, FALSE, COL$text)))
   }
   ft <- ft %>% flextable::border_remove() %>% flextable::set_table_properties(layout = "fixed") %>% flextable::valign(valign = "center") %>%
-    flextable::bg(j = 1, bg = c(COL$red, "#B8651B", "#C9A45C", COL$green)) %>% flextable::bg(j = 2:3, bg = "#EAF1F5") %>% flextable::padding(padding.left = 10) %>%
+    flextable::bg(j = 1, bg = c(COL$red, "#C25B24", "#D4A94F", COL$green)) %>% flextable::bg(j = 2:3, bg = "#E7F0EE") %>% flextable::padding(padding.left = 10) %>%
     flextable::border_inner_h(border = brd("white", 7))
   ft <- flextable::width(ft, j = 1, width = 0.22) %>% flextable::width(j = 2, width = 1.6) %>% flextable::width(j = 3, width = 5.4) %>% flextable::height(height = 1.2) %>% flextable::hrule(rule = "exact")
   x <- pp_add(x, ft, 5.6, 1.65, 7.25, 4.8)
-  x <- pp_add(x, ft_banner(sprintf("Next step: concentrate support on countries under %d%%, protect existing gains and clear every N/E campaign.", CFG$bands[2]), 12.4, 0.65, COL$navy, "white", 16), 0.45, 6.55, 12.4, 0.65)
+  x <- pp_add(x, ft_banner(sprintf("Next step: concentrate support on countries under %d%%, protect existing gains and close the data gaps behind missed standards.", CFG$bands[2]), 12.4, 0.65, COL$navy, "white", 16), 0.45, 6.55, 12.4, 0.65)
 
   # 8 --- heatmap
-  x <- ns("Standard-by-standard view per country", "Standards reached (green), missed (red) or not assessable (grey) in each country's latest scorable campaign")
+  x <- ns("Standard-by-standard view per country", "Actual value per country, latest scorable campaign: green = met, red = missed, N/E = not assessable")
   x <- pp_img(x, file.path(chdir, "04_indicator_heatmap.png"), 0.8, 1.55, 11.7, 5.5)
 
   # 9 --- data quality
@@ -1131,7 +1167,7 @@ build_pptx <- function(res, file, chdir) {
   ft <- flextable::flextable(dd) %>% flextable::set_header_labels(Action = "Action", Owner = "Owner", Timeline = "Timeline", Proof = "Proof of delivery") %>%
     flextable::bg(part = "header", bg = COL$navy) %>% flextable::color(part = "header", color = "white") %>% flextable::bold(part = "header") %>% flextable::fontsize(size = 11, part = "header") %>%
     flextable::fontsize(size = 12, part = "body") %>% flextable::font(fontname = FONT, part = "all") %>% flextable::color(color = COL$text, part = "body") %>% flextable::bold(j = 2, part = "body") %>% flextable::align(j = 2:3, align = "center", part = "all") %>%
-    flextable::border_remove() %>% flextable::border_inner_h(border = brd("#D9E0E8"), part = "body") %>% flextable::valign(valign = "center", part = "all") %>%
+    flextable::border_remove() %>% flextable::border_inner_h(border = brd("#D5DDD8"), part = "body") %>% flextable::valign(valign = "center", part = "all") %>%
     flextable::padding(padding.left = 8, padding.right = 8, padding.top = 6, padding.bottom = 6) %>% flextable::set_table_properties(layout = "fixed")
   ft <- flextable::width(ft, j = 1, width = 5.6) %>% flextable::width(j = 2, width = 1.6) %>% flextable::width(j = 3, width = 2.2) %>% flextable::width(j = 4, width = 3.0) %>% flextable::height(height = 0.95, part = "body") %>% flextable::hrule(rule = "atleast")
   x <- pp_add(x, ft, 0.45, 1.7, 12.4, 4.6)
