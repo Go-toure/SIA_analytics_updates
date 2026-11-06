@@ -762,6 +762,20 @@ segment_table <- function(ct) {
     n = length(countries)) %>% ungroup()
 }
 
+# ----------------------------------------------------------------------------- reading notes (kept in the workbook, not on the slides)
+reading_notes <- function(res) {
+  K <- res$K
+  lq <- ifelse(is.na(K$lqas_max), "no LQAS data were found", sprintf("LQAS data end on %s; later campaigns have no LQAS result yet and are not penalised", format(K$lqas_max)))
+  lim <- list(list(label = "Standards: ", value = "working defaults (workbook, sheet Standards) to be confirmed by the technical team", col = COL$navy),
+              list(label = "Coverage: ", value = "administrative coverage, not an independent verification; co-administered vaccines are collapsed by district", col = COL$navy),
+              list(label = "LQAS conducted: ", value = sprintf("districts in the campaign scope (Scope file) compared with districts that have an LQAS result; threshold %d%% of districts is a working default to confirm", CFG$lqas_scope_min), col = COL$navy),
+              list(label = "LQAS: ", value = lq, col = COL$navy),
+              list(label = "Shown, not scored: ", value = sprintf("LQ4 refusals (at most %g%% of sampled children) and the IM social-mobilisation view (awareness 80%%, coverage 90%%) inform the discussion but do not change the score", CFG$noncomp_max), col = COL$navy),
+              list(label = "Comparisons: ", value = "quarters can include different countries and campaigns; changes are indicative", col = COL$navy),
+              list(label = "Not included: ", value = "financing and microplan timeliness; IM results enter only through the awareness-vs-coverage view", col = COL$navy))
+  tibble(Topic = trimws(sub(":\\s*$", "", vapply(lim, function(z) z$label, ""))), Note = vapply(lim, function(z) z$value, ""))
+}
+
 # ----------------------------------------------------------------------------- 8. EXCEL
 write_workbook <- function(res, file) {
   library(openxlsx)
@@ -780,7 +794,7 @@ write_workbook <- function(res, file) {
       sprintf("First vs latest evaluable campaign; change within +/-%d points = No change", CFG$trend_tol),
       "Intensive support: score below the first band or below the second band and declining | Active watch | Focused fixes | Sustain gains | Validate data first (cross-cutting: N/E, limited evidence, or LQAS results not linked to the campaign)",
       "The standards in sheet Standards are working defaults to be confirmed by the technical team. Admin coverage is not an independent verification; LQAS is used where it exists."))
-  add("README", readme, c(26, 120))
+  add("README", readme, c(26, 120)); add("Reading_notes", reading_notes(res), c(24, 140))
   add("Country_summary", res$country %>% transmute(Country = country, `Latest score` = latest_score, Band = as.character(band), Risk = as.character(risk), Trend = trend, `First score` = first_score, Change = change,
         `Latest campaign` = latest_response, Round = latest_round, `Latest date` = latest_date, `Evaluable campaigns` = n_eval, `Campaigns in period` = n_campaigns,
         Evidence = latest_evidence, Segment = segment, `Needs validation` = ifelse(needs_validation, "Yes", ""), `Indicators not met (latest)` = failed), c(22, 10, 14, 11, 24, 10, 9, 36, 8, 12, 11, 11, 10, 20, 11, 70))
@@ -858,7 +872,8 @@ write_narrative <- function(res, html_file, md_file) {
           "## Latest scorable campaign by country", "", "| Country | Score | Trend | Segment | Indicators not met |", "|---|---:|---|---|---|",
           map_chr(seq_len(nrow(ct %>% filter(!is.na(latest_score)))), function(i) { r <- ct %>% filter(!is.na(latest_score)) %>% arrange(desc(latest_score)) %>% slice(i); sprintf("| %s | %s%% | %s | %s | %s |", r$country, r$latest_score, r$trend, r$segment, r$failed) }),
           "", "## Commitments", "", "| Action | Owner | Timeline | Proof |", "|---|---|---|---|",
-          map_chr(seq_len(nrow(res$decisions)), function(i) with(res$decisions[i, ], sprintf("| %s | %s | %s | %s |", Action, Owner, Timeline, Proof))))
+          map_chr(seq_len(nrow(res$decisions)), function(i) with(res$decisions[i, ], sprintf("| %s | %s | %s | %s |", Action, Owner, Timeline, Proof))),
+          "", "## Reading notes and limits", "", {rn <- reading_notes(res); sprintf("- **%s:** %s", rn$Topic, rn$Note)})
   writeLines(md, md_file, useBytes = TRUE)
 }
 
@@ -1226,18 +1241,6 @@ build_pptx <- function(res, file, chdir) {
   x <- pp_add(x, ft, 0.45, 1.7, 12.4, 4.6)
   x <- pp_add(x, ft_banner("Rule for every gap: a named owner, a deadline and written proof that it is closed.", 12.4, 0.6, COL$navy, "white", 15), 0.45, 6.55, 12.4, 0.6)
 
-  # 13 --- how to read / limits
-  x <- ns("Reading notes and limits", "What the score captures, and what it leaves out")
-  lq <- ifelse(is.na(K$lqas_max), "no LQAS data were found", sprintf("LQAS data end on %s; later campaigns have no LQAS result yet and are not penalised", format(K$lqas_max)))
-  lim <- list(list(label = "Standards: ", value = "working defaults (workbook, sheet Standards) to be confirmed by the technical team", col = COL$navy),
-              list(label = "Coverage: ", value = "administrative coverage, not an independent verification; co-administered vaccines are collapsed by district", col = COL$navy),
-              list(label = "LQAS conducted: ", value = sprintf("districts in the campaign scope (Scope file) compared with districts that have an LQAS result; threshold %d%% of districts is a working default to confirm", CFG$lqas_scope_min), col = COL$navy),
-              list(label = "LQAS: ", value = lq, col = COL$navy),
-              list(label = "Shown, not scored: ", value = sprintf("LQ4 refusals (at most %g%% of sampled children) and the IM social-mobilisation view (awareness 80%%, coverage 90%%) inform the discussion but do not change the score", CFG$noncomp_max), col = COL$navy),
-              list(label = "Comparisons: ", value = "quarters can include different countries and campaigns; changes are indicative", col = COL$navy),
-              list(label = "Not included: ", value = "financing and microplan timeliness; IM results enter only through the awareness-vs-coverage view", col = COL$navy))
-  x <- pp_add(x, ft_panel("What the score cannot tell you", lim, COL$navy, 12.4, 3.7, 0.45, 15), 0.45, 1.7, 12.4, 3.6)
-  x <- pp_txt(x, sprintf("Files: %s%s. Script: sia_executive_review.R. Generated %s.", basename(res$admin_file), paste0(ifelse(is.null(res$lqas_file), "", paste0(" + ", basename(res$lqas_file))), ifelse(is.null(res$scope_file), "", paste0(" + ", basename(res$scope_file))), ifelse(is.null(res$im_file), "", paste0(" + ", basename(res$im_file)))), format(Sys.Date())), 0.45, 5.9, 12.4, 0.5, 11.5, FALSE, COL$muted)
   print(x, target = file)
   invisible(file)
 }
