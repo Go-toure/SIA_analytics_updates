@@ -1087,7 +1087,7 @@ build_pptx <- function(res, file, chdir) {
   x <- pp_txt(x, header, 0.9, 1.7, 11.5, 0.4, 14, FALSE, "#BDE0DC", italic = TRUE)
   x <- pp_txt(x, CFG$title, 0.9, 2.2, 11.5, 1.8, 38, TRUE, "white", font = SERIF)
   x <- pp_txt(x, "Scores, trends, data reliability, priorities and next steps by country", 0.9, 4.15, 11.5, 0.5, 18, FALSE, "#D7ECEA")
-  x <- pp_txt(x, sprintf("%s | %d countries | %d campaign rounds scored", span, K$n_countries, K$n_campaigns), 0.9, 6.3, 11.5, 0.4, 15, FALSE, "white")
+  x <- pp_txt(x, sprintf("%s | %d countries | %d campaigns (%d rounds) scored", span, K$n_countries, n_distinct(paste(res$camp$country, res$camp$Response)), K$n_campaigns), 0.9, 6.3, 11.5, 0.4, 15, FALSE, "white")
 
   # 2 --- method
   x <- ns("How the scores are built", "One transparent rule applied to every campaign round, so countries can be compared fairly")
@@ -1230,7 +1230,12 @@ build_pptx <- function(res, file, chdir) {
   x <- ns("Reliable data come first", "Late reports, mismatched codes and missing LQAS can hide poor results or flatter good ones")
   nea <- res$camp %>% filter(!small, !evaluable)
   x <- pp_add(x, ft_tile(K$n_campaigns, COL$navy, "Rounds in scope", sprintf("%d scorable, %d N/E", K$n_eval, K$n_ne), 2.6, 1.4), 0.45, 1.7, 2.6, 1.4)
-  x <- pp_add(x, ft_tile(pct(100 * K$n_ne / max(1, K$n_campaigns), 1), COL$red, "N/E share", "campaigns not scored", 2.6, 1.4), 3.25, 1.7, 2.6, 1.4)
+  nim <- if ("im_src" %in% names(res$camp)) sum(res$camp$im_src %in% "no IM result found") else NA_integer_
+  if (!is.na(nim) && any(res$camp$im_src %in% c("campaign code", "country, round and date", "no IM result found"))) {
+    x <- pp_add(x, ft_tile(sprintf("%d of %d", nim, K$n_campaigns), COL$red, "Rounds without IM", "no independent-monitoring result found (counted as not met)", 2.6, 1.4), 3.25, 1.7, 2.6, 1.4)
+  } else {
+    x <- pp_add(x, ft_tile(sprintf("%d of %d", K$n_late, K$n_campaigns), COL$red, "Late reports", sprintf("campaigns reported after %d days", CFG$delay_max_days), 2.6, 1.4), 3.25, 1.7, 2.6, 1.4)
+  }
   x <- pp_add(x, ft_tile(ifelse(is.finite(K$med_delay_all), sprintf("%.0f d", K$med_delay_all), "n/a"), COL$orange, "Median report delay", sprintf("standard: %d days or less", CFG$delay_max_days), 2.6, 1.4), 0.45, 3.3, 2.6, 1.4)
   x <- pp_add(x, ft_tile(ifelse(is.na(K$lq_scope_pct_all), "n/a", pct(K$lq_scope_pct_all, 0)), COL$orange, "LQAS reach", "of districts in scope have an LQAS result", 2.6, 1.4), 3.25, 3.3, 2.6, 1.4)
   x <- pp_img(x, file.path(chdir, "05_data_quality.png"), 6.2, 1.6, 6.7, 3.2)
@@ -1238,7 +1243,6 @@ build_pptx <- function(res, file, chdir) {
   x <- pp_txt(x, "Campaigns that could not be scored", 0.45, 4.95, 8, 0.35, 14, TRUE, COL$navy)
   x <- pp_txt(x, ne_txt, 0.45, 5.3, 12.4, 0.8, 12.5, FALSE, COL$text)
   x <- pp_txt(x, sprintf("%d campaign code(s) point to another country; %d scored campaign(s) rest on thin evidence.", K$n_code_bad, K$n_limited), 0.45, 6.05, 12.4, 0.4, 12, FALSE, COL$muted)
-  x <- pp_add(x, ft_banner(sprintf("Action: complete the data or explain the gaps within %s.", CFG$days_validate), 12.4, 0.6, COL$red, "white", 16), 0.45, 6.55, 12.4, 0.6)
 
   # 10b --- alternative view of the support groups: heatmap matrix (why each country is in its group)
   if (file.exists(file.path(chdir, "10_support_groups_matrix.png"))) {
