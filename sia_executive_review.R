@@ -673,7 +673,8 @@ ch_dq <- function(camp, long) {
   if (!nrow(d)) return(NULL)
   lv <- unique(arrange(d, period_key)$period)
   d <- d %>% mutate(period = factor(period, levels = lv))
-  ggplot(d, aes(rate, fct_rev(factor(label, levels = IND$label)), fill = period)) +
+  d <- d %>% mutate(label = ifelse(label == "Consistent campaign code", "Inconsistent campaign code", label))   # the bars show the share of campaigns that MISSED the standard
+  ggplot(d, aes(rate, fct_rev(factor(label, levels = ifelse(IND$label == "Consistent campaign code", "Inconsistent campaign code", IND$label))), fill = period)) +
     geom_col(position = position_dodge2(reverse = TRUE), width = 0.7) +
     geom_text(aes(label = paste0(round(rate), "%")), position = position_dodge2(reverse = TRUE, width = 0.7), hjust = -0.2, size = 3.3) +
     scale_fill_manual(values = setNames(c(COL$grey, COL$red, COL$navy, COL$orange)[seq_along(lv)], lv)) +
