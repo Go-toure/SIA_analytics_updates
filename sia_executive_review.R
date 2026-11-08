@@ -618,19 +618,19 @@ ch_heat <- function(ct, long) {
     lab = ifelse(id == "DQ1", ifelse(value < 0, "date error", ifelse(value > cap, sprintf("> %d d", cap), sprintf("%.0f d", value))), ifelse(id == "DQ2", "", sprintf("%.0f%%", value))))
   have <- d %>% filter(result != "N/E", !is.na(value))
   ne <- d %>% filter(result == "N/E" | is.na(value))
-  pad <- d %>% filter(id == "DQ1") %>% slice(1) %>% mutate(xv = cap * 1.25)   # extra room on the right of the reporting panel so "> 60 d" is not cut
+  pad <- d %>% filter(id == "DQ1") %>% slice(1) %>% mutate(xv = cap * 1.05)   # extra room on the right of the reporting panel so "> 60 d" is not cut
   ggplot() +
     geom_segment(data = have, aes(x = 0, xend = xv, y = country, yend = country), colour = "#D3D8D2", linewidth = 0.9) +
     geom_vline(data = d %>% distinct(label, thr), aes(xintercept = thr), colour = COL$navy, linetype = "dashed", linewidth = 0.6) +
     geom_point(data = have, aes(xv, country, colour = cls), size = 3.6) +
-    geom_text(data = have, aes(xv, country, label = lab), hjust = -0.35, size = 3.5, fontface = "bold", colour = COL$text) +
-    geom_text(data = ne, aes(x = 0, y = country, label = ifelse(result == "N/E", "N/E", "no data")), hjust = -0.2, size = 3.2, colour = "#9AA5A3", fontface = "italic") +
+    geom_text(data = have, aes(xv, country, label = lab), hjust = -0.35, size = 4.2, colour = COL$text) +
+    geom_text(data = ne, aes(x = 0, y = country, label = ifelse(result == "N/E", "N/E", "no data")), hjust = -0.2, size = 3.8, colour = "#9AA5A3", fontface = "italic") +
     geom_blank(data = pad, aes(xv, country)) +
     facet_wrap(~label, nrow = 1, scales = "free_x") +
     scale_colour_manual(values = c(Yes = COL$green, No = COL$red, `N/E` = "#D3D8D2"), breaks = c("Yes", "No"), labels = c("Standard met", "Standard missed")) +
-    scale_x_continuous(expand = expansion(mult = c(0.01, 0.3)), breaks = function(l) if (l[2] > 100) c(0, 25, 50, 75, 100) else pretty(c(0, cap), 4)) +
+    scale_x_continuous(expand = expansion(mult = c(0.01, 0.34)), breaks = function(l) if (l[2] > 100) c(0, 25, 50, 75, 100) else pretty(c(0, cap), 4)) +
     labs(title = "Where each country stands on every standard, latest assessable campaign (dashed line = target)") +
-    theme_sia(10) + theme(strip.text = element_text(size = 8.5, face = "bold", colour = COL$navy, lineheight = 0.95), axis.text.x = element_text(size = 7.5),
+    theme_sia(10) + theme(strip.text = element_text(size = 10.5, face = "bold", colour = COL$navy, lineheight = 0.95), legend.text = element_text(size = 10.5), axis.text.x = element_text(size = 9), axis.text.y = element_text(size = 12, colour = COL$text),
                           panel.grid.major.y = element_line(colour = "#EEF2EE"), panel.grid.major.x = element_line(colour = "#EEF2EE"), panel.spacing.x = grid::unit(0.9, "lines"))
 }
 
