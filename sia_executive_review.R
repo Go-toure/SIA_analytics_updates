@@ -102,7 +102,7 @@ COL <- list(purple = "#7A5C99", navy = "#14454F", green = "#3D8B6E", gold = "#E3
 # ----------------------------------------------------------------------------- 2. INDICATORS
 IND <- tribble(
   ~id,    ~pillar,              ~label,                      ~standard_text,
-  "COV1", "Coverage",           "Districts at \u2265 95%",    "At least {share_ge95_std}% of districts reach {cov_std}% coverage or more",
+  "COV1", "Coverage",           "IM districts at \u2265 95%", "At least {share_ge95_std}% of the districts monitored by independent monitoring (IM) reach {cov_std}% coverage or more",
   "DQ1",  "Data quality",       "Timely reporting",          "Median report delay of at most {delay_max_days} days",
   "DQ2",  "Data quality",       "Consistent campaign code",  "Campaign code matches the country",
   "LQ1",  "LQAS verification",  "LQAS conducted",            "{lqas_scope_min}% of the districts in scope have an LQAS result (districts in scope compared with districts in LQAS)",
@@ -305,7 +305,7 @@ build_units <- function(adm, from, to) {
   u
 }
 
-score_campaigns <- function(units, lqas, prefixes, lqas_max, scope = NULL) {
+score_campaigns <- function(units, lqas, prefixes, lqas_max, scope = NULL, im = NULL) {
   camp <- units %>% group_by(key, Country, Response, Round_Add) %>%
     summarise(
       n_districts = n(), date = median(sia_date, na.rm = TRUE), first_date = min_date(sia_date), vaccine = paste(sort(unique(vaccine[vaccine != ""])), collapse = " + "),
@@ -391,17 +391,36 @@ score_campaigns <- function(units, lqas, prefixes, lqas_max, scope = NULL) {
   }
   camp$lq_expected <- !is.na(lqas_max) & (camp$date + CFG$lqas_grace_days <= lqas_max)
 
+  # COV1 comes from the independent monitoring (IM) data: share of the monitored districts whose IM coverage (finger-marked / present) reaches the coverage standard.
+  # Link 1: same country + campaign code + round. Link 2 (campaigns still without IM): IM of the same country and round dated around the campaign, from a campaign code not already linked.
+  camp$im_n <- NA_integer_; camp$im_n95 <- NA_integer_; camp$im_share95 <- NA_real_; camp$im_src <- NA_character_
+  if (!is.null(im) && nrow(im)) {
+    imx <- im %>% mutate(ctry = toupper(str_squish(country)), rs = norm_resp(response), rn = round_num(round)) %>% filter(is.finite(present), present > 0)
+    cc <- toupper(str_squish(camp$Country)); crs <- norm_resp(camp$Response); crn <- round_num(camp$Round_Add)
+    pick <- vector("list", nrow(camp))
+    for (i in seq_len(nrow(camp))) { z <- imx %>% filter(ctry == cc[i], rs == crs[i], rn == crn[i]); if (nrow(z)) pick[[i]] <- list(z = z, src = "campaign code") }
+    claimed <- imx %>% semi_join(tibble(ctry = cc, rs = crs, rn = crn)[map_lgl(pick, ~ !is.null(.x)), ], by = c("ctry", "rs", "rn")) %>% distinct(ctry, rs, rn)
+    for (i in which(map_lgl(pick, is.null))) {
+      z <- imx %>% filter(ctry == cc[i], rn == crn[i], !is.na(date), date >= camp$date[i] - 7, date <= camp$date[i] + 75) %>% anti_join(claimed, by = c("ctry", "rs", "rn"))
+      if (nrow(z)) pick[[i]] <- list(z = z, src = "country, round and date")
+    }
+    for (i in seq_len(nrow(camp))) if (!is.null(pick[[i]])) {
+      dd <- pick[[i]]$z %>% group_by(district) %>% summarise(cv = sum(vaccinated, na.rm = TRUE) / sum(present, na.rm = TRUE), .groups = "drop")
+      camp$im_n[i] <- nrow(dd); camp$im_n95[i] <- sum(dd$cv >= CFG$cov_std / 100, na.rm = TRUE); camp$im_share95[i] <- 100 * camp$im_n95[i] / camp$im_n[i]; camp$im_src[i] <- pick[[i]]$src
+    }
+  } else { camp$im_share95 <- camp$share_ge95; camp$im_src <- "administrative data (no IM file)" }
+
   yn <- function(ok, na) ifelse(na, "N/E", ifelse(ok, "Yes", "No"))
   res <- camp %>% transmute(
     key,
     # the data are produced by the programme itself: a missing record means the step was not done, so it counts as "not met".
     # Only an LQAS that cannot yet be due (campaign too recent for the LQAS data) stays N/E.
-    COV1 = ifelse(!is.na(share_ge95) & share_ge95 >= CFG$share_ge95_std, "Yes", "No"),
+    COV1 = ifelse(!is.na(im_share95) & im_share95 >= CFG$share_ge95_std, "Yes", "No"),
     DQ1  = ifelse(!is.na(med_delay) & med_delay >= 0 & med_delay <= CFG$delay_max_days, "Yes", "No"),
     DQ2  = ifelse(!(code_ok %in% FALSE), "Yes", "No"),
     LQ1  = case_when(!is.na(lq_scope_pct) & lq_scope_pct >= CFG$lqas_scope_min ~ "Yes", is.na(lq_lots) & !lq_expected ~ "N/E", TRUE ~ "No"),
     LQ2  = case_when(!is.na(lq_pass) ~ ifelse(lq_pass >= CFG$lqas_pass_std, "Yes", "No"), !lq_expected ~ "N/E", TRUE ~ "No"))
-  vals <- camp %>% transmute(key, COV1 = share_ge95, DQ1 = med_delay, DQ2 = as.numeric(code_ok), LQ1 = lq_scope_pct, LQ2 = lq_pass)
+  vals <- camp %>% transmute(key, COV1 = im_share95, DQ1 = med_delay, DQ2 = as.numeric(code_ok), LQ1 = lq_scope_pct, LQ2 = lq_pass)
   long <- res %>% pivot_longer(-key, names_to = "id", values_to = "result") %>%
     left_join(vals %>% pivot_longer(-key, names_to = "id", values_to = "value"), by = c("key", "id")) %>%
     left_join(IND, by = "id")
@@ -601,7 +620,7 @@ ch_heat <- function(ct, long) {
     geom_vline(data = d %>% distinct(label, thr), aes(xintercept = thr), colour = COL$navy, linetype = "dashed", linewidth = 0.6) +
     geom_point(data = have, aes(xv, country, colour = cls), size = 3.6) +
     geom_text(data = have, aes(xv, country, label = lab), hjust = -0.35, size = 2.7, colour = COL$text) +
-    geom_text(data = ne, aes(x = 0, y = country, label = "N/E"), hjust = -0.2, size = 2.6, colour = "#9AA5A3", fontface = "italic") +
+    geom_text(data = ne, aes(x = 0, y = country, label = ifelse(result == "N/E", "N/E", "no data")), hjust = -0.2, size = 2.6, colour = "#9AA5A3", fontface = "italic") +
     facet_wrap(~label, nrow = 1, scales = "free_x") +
     scale_colour_manual(values = c(Yes = COL$green, No = COL$red, `N/E` = "#D3D8D2"), breaks = c("Yes", "No"), labels = c("Standard met", "Standard missed")) +
     scale_x_continuous(expand = expansion(mult = c(0.01, 0.2)), breaks = function(l) if (l[2] > 100) c(0, 25, 50, 75, 100) else pretty(l, 4)) +
@@ -772,7 +791,7 @@ reading_notes <- function(res) {
   K <- res$K
   lq <- ifelse(is.na(K$lqas_max), "no LQAS data were found", sprintf("LQAS data end on %s; later campaigns have no LQAS result yet and are not penalised", format(K$lqas_max)))
   lim <- list(list(label = "Standards: ", value = "working defaults (workbook, sheet Standards) to be confirmed by the technical team", col = COL$navy),
-              list(label = "Coverage: ", value = "administrative coverage, not an independent verification; co-administered vaccines are collapsed by district", col = COL$navy),
+              list(label = "Coverage: ", value = "coverage standard (IM districts at 95% or more) is computed from the independent monitoring (IM) data; a campaign without IM results counts as not met; administrative coverage is kept in the workbook for reference", col = COL$navy),
               list(label = "LQAS conducted: ", value = sprintf("districts in the campaign scope (Scope file) compared with districts that have an LQAS result; target: %d%% of the districts in scope", CFG$lqas_scope_min), col = COL$navy),
               list(label = "LQAS: ", value = lq, col = COL$navy),
               list(label = "LQAS districts passed: ", value = "a district passes LQAS when it meets the decision rule recorded in the LQAS file; results are grouped by the quarter of the LQAS date; campaigns are the rounds of the campaign calendar (Finished or In Progress; rounds on hold are excluded) that started in the quarter", col = COL$navy),
@@ -799,13 +818,13 @@ write_workbook <- function(res, file) {
       sprintf("Latest evaluable score: below %d%% | %d-%d%% | %d-%d%% | %d%% or above", CFG$bands[1], CFG$bands[1], CFG$bands[2] - 1, CFG$bands[2], CFG$bands[3] - 1, CFG$bands[3]),
       sprintf("First vs latest evaluable campaign; change within +/-%d points = No change", CFG$trend_tol),
       "Intensive support: score below the first band or below the second band and declining | Active watch | Focused fixes | Sustain gains | Validate data first (cross-cutting: N/E, limited evidence, or LQAS results not linked to the campaign)",
-      "The standards in sheet Standards are working defaults to be confirmed by the technical team. Admin coverage is not an independent verification; LQAS is used where it exists."))
+      "The standards in sheet Standards are working defaults to be confirmed by the technical team. Coverage (COV1) comes from the IM data; a campaign without IM results counts as not met."))
   add("README", readme, c(26, 120)); add("Reading_notes", reading_notes(res), c(24, 140))
   add("Country_summary", res$country %>% transmute(Country = country, `Latest score` = latest_score, Band = as.character(band), Risk = as.character(risk), Trend = trend, `First score` = first_score, Change = change,
         `Latest campaign` = latest_response, Round = latest_round, `Latest date` = latest_date, `Evaluable campaigns` = n_eval, `Campaigns in period` = n_campaigns,
         Evidence = latest_evidence, Segment = segment, `Needs validation` = ifelse(needs_validation, "Yes", ""), `Indicators not met (latest)` = failed), c(22, 10, 14, 11, 24, 10, 9, 36, 8, 12, 11, 11, 10, 20, 11, 70))
   add("Campaign_scores", res$camp %>% transmute(Country = country, Response, Round = Round_Add, Date = date, Period = period, Vaccine = vaccine, Districts = n_districts, Status = status, Score = score,
-        `Indicators met` = n_yes, `Not met` = n_no, `N/E` = n_ne, Evidence = evidence, `Coverage %` = round(cov_total, 1), `Districts >= std %` = round(share_ge95, 1),
+        `Indicators met` = n_yes, `Not met` = n_no, `N/E` = n_ne, Evidence = evidence, `Coverage %` = round(cov_total, 1), `Districts >= std % (admin, reference)` = round(share_ge95, 1), `IM districts` = im_n, `IM districts >= std` = im_n95, `IM districts >= std %` = round(im_share95, 1), `IM link` = im_src,
         `Districts < low %` = round(share_low, 1), `Complete %` = round(complete, 1), `Implausible %` = round(implaus, 1), `Median report delay (d)` = med_delay,
         `Districts in scope` = lq_scope_n, `In scope with LQAS` = lq_scope_hit, `LQAS reach %` = round(lq_scope_pct, 1), `Scope source` = scope_src, `LQAS districts` = lq_lots, `LQAS pass %` = round(lq_pass, 1),
         `LQ4 refusal % (shown, not scored)` = round(lq_noncomp, 2), `LQ4 within standard` = ifelse(is.na(lq_noncomp), "N/E", ifelse(lq_noncomp <= CFG$noncomp_max, "Yes", "No"))), c(20, 34, 8, 12, 10, 16, 10, 22, 8, 9, 8, 6, 9, 10, 12, 12, 10, 11, 12, 11, 12, 11, 12, 9, 10, 16, 14))
@@ -1296,7 +1315,7 @@ run_sia_review <- function(admin_file = NULL, lqas_file = NULL, from = NULL, to 
 
   units <- build_units(adm, from, to)
   if (!nrow(units)) stop("No campaign with a date between ", from, " and ", to, " in the admin file.")
-  sc <- score_campaigns(units, lqas, prefixes, lqas_max, scope)
+  sc <- score_campaigns(units, lqas, prefixes, lqas_max, scope, im)
   camp <- sc$camp; long <- sc$long
   ct <- country_table(camp, long); pt <- period_tables(camp, long)
   K <- make_key_numbers(camp, units, ct, pt, from, to, lqas_max, long)
