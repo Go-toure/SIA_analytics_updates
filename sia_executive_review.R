@@ -242,7 +242,7 @@ load_im <- function(path) {
   g <- function(n) if (n %in% names(x)) suppressWarnings(as.numeric(x[[n]])) else rep(NA_real_, nrow(x))
   dcol <- intersect(c("round_start_date", "start_date_im_end", "start_date"), names(x))[1]
   tibble(country = canon_country(x$country), province = as.character(x$province %||% NA), district = as.character(x$district), response = as.character(x$response),
-         round = as.character(x$roundnumber %||% NA), date = as_date_safe(x[[dcol]]), present = g("u5_present"), vaccinated = g("u5_fm"),
+         round = as.character(x$roundnumber %||% NA), date = as_date_safe(x[[dcol]]), im_date = as_date_safe(if ("start_date_im_end" %in% names(x)) x[["start_date_im_end"]] else x[[dcol]]), present = g("u5_present"), vaccinated = g("u5_fm"),
          missed = ifelse(is.na(g("missed_child")), pmax(g("u5_present") - g("u5_fm"), 0), g("missed_child")),
          hh = g("number_of_hh_visited"), informed = g("care_giver_informed_sia"))
 }
@@ -401,13 +401,15 @@ score_campaigns <- function(units, lqas, prefixes, lqas_max, scope = NULL, im = 
     for (i in seq_len(nrow(camp))) { z <- imx %>% filter(ctry == cc[i], rs == crs[i], rn == crn[i]); if (nrow(z)) pick[[i]] <- list(z = z, src = "campaign code") }
     claimed <- imx %>% semi_join(tibble(ctry = cc, rs = crs, rn = crn)[map_lgl(pick, ~ !is.null(.x)), ], by = c("ctry", "rs", "rn")) %>% distinct(ctry, rs, rn)
     for (i in which(map_lgl(pick, is.null))) {
-      z <- imx %>% filter(ctry == cc[i], rn == crn[i], !is.na(date), date >= camp$date[i] - 7, date <= camp$date[i] + 75) %>% anti_join(claimed, by = c("ctry", "rs", "rn"))
+      # the IM end process is carried out after the campaign, like the LQAS: use the date of the IM end process
+      z <- imx %>% filter(ctry == cc[i], rn == crn[i], !is.na(im_date), im_date >= camp$date[i] - 7, im_date <= camp$date[i] + 75) %>% anti_join(claimed, by = c("ctry", "rs", "rn"))
       if (nrow(z)) pick[[i]] <- list(z = z, src = "country, round and date")
     }
     for (i in seq_len(nrow(camp))) if (!is.null(pick[[i]])) {
       dd <- pick[[i]]$z %>% group_by(district) %>% summarise(cv = sum(vaccinated, na.rm = TRUE) / sum(present, na.rm = TRUE), .groups = "drop")
       camp$im_n[i] <- nrow(dd); camp$im_n95[i] <- sum(dd$cv >= CFG$cov_std / 100, na.rm = TRUE); camp$im_share95[i] <- 100 * camp$im_n95[i] / camp$im_n[i]; camp$im_src[i] <- pick[[i]]$src
     }
+    camp$im_src[is.na(camp$im_src)] <- "no IM result found"
   } else { camp$im_share95 <- camp$share_ge95; camp$im_src <- "administrative data (no IM file)" }
 
   yn <- function(ok, na) ifelse(na, "N/E", ifelse(ok, "Yes", "No"))
