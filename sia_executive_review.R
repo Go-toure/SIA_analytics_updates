@@ -1222,26 +1222,6 @@ build_pptx <- function(res, file, chdir) {
     x <- pp_add(x, ft_banner("Advocacy: intensify pre-campaign mobilisation where awareness is below 80%.", 12.4, 0.5, COL$navy, "white", 13), 0.45, 6.95, 12.4, 0.4)
   }
 
-  # 7 --- bands (slide-8 layout)
-  bc <- table(factor(scored$band, levels = levels(scored$band))); bl <- levels(scored$band)
-  x <- ns(ifelse(K$n_below >= 0.5 * K$n_countries_scored, "Latest results are still low in many countries", "Strong and weak performers are far apart"), sprintf("%d of %d countries scored under %d%% in their latest assessable campaign", K$n_below, K$n_countries_scored, CFG$bands[2]))
-  cf <- tempfile(fileext = ".png"); circles_png(as.integer(bc), c("Critical", "Serious", "Watch", "On track"), sprintf("%d%% of countries", round(100 * as.integer(bc) / max(1, K$n_countries_scored))), c(COL$red, "#C25B24", "#D4A94F", COL$green), cf)
-  x <- pp_img(x, cf, 0.45, 1.65, 4.9, 4.75)
-  names_b <- c(paste("Below", CFG$bands[1], "%"), bl[2], bl[3], paste(CFG$bands[3], "% or above"))
-  lists_b <- map_chr(1:4, function(.x) { sel <- scored[scored$band == bl[.x], ]; list_names(sel$country[order(-sel$latest_score)], 9) })
-  ft <- flextable::flextable(data.frame(a = rep("", 4), b = rep("", 4), c = rep("", 4))) %>% flextable::delete_part("header")
-  for (i in 1:4) {
-    ft <- flextable::compose(ft, i = i, j = 1, value = flextable::as_paragraph(ch(" ", 8)))
-    ft <- flextable::compose(ft, i = i, j = 2, value = flextable::as_paragraph(ch(names_b[i], 14, TRUE, COL$navy)))
-    ft <- flextable::compose(ft, i = i, j = 3, value = flextable::as_paragraph(ch(lists_b[i], 14, FALSE, COL$text)))
-  }
-  ft <- ft %>% flextable::border_remove() %>% flextable::set_table_properties(layout = "fixed") %>% flextable::valign(valign = "center") %>%
-    flextable::bg(j = 1, bg = c(COL$red, "#C25B24", "#D4A94F", COL$green)) %>% flextable::bg(j = 2:3, bg = "#E7F0EE") %>% flextable::padding(padding.left = 10) %>%
-    flextable::border_inner_h(border = brd("white", 7))
-  ft <- flextable::width(ft, j = 1, width = 0.22) %>% flextable::width(j = 2, width = 1.6) %>% flextable::width(j = 3, width = 5.4) %>% flextable::height(height = 1.2) %>% flextable::hrule(rule = "exact")
-  x <- pp_add(x, ft, 5.6, 1.65, 7.25, 4.8)
-  x <- pp_add(x, ft_banner(sprintf("Next step: concentrate support on countries under %d%%, protect existing gains and close the data gaps behind missed standards.", CFG$bands[2]), 12.4, 0.65, COL$navy, "white", 16), 0.45, 6.55, 12.4, 0.65)
-
   # 8 --- heatmap
   x <- ns("Standard-by-standard view per country", "Actual value per country, latest scorable campaign: green = met, red = missed, N/E = not assessable")
   x <- pp_img(x, file.path(chdir, "04_indicator_heatmap.png"), 0.8, 1.55, 11.7, 5.5)
@@ -1260,52 +1240,12 @@ build_pptx <- function(res, file, chdir) {
   x <- pp_txt(x, sprintf("%d campaign code(s) point to another country; %d scored campaign(s) rest on thin evidence.", K$n_code_bad, K$n_limited), 0.45, 6.05, 12.4, 0.4, 12, FALSE, COL$muted)
   x <- pp_add(x, ft_banner(sprintf("Action: complete the data or explain the gaps within %s.", CFG$days_validate), 12.4, 0.6, COL$red, "white", 16), 0.45, 6.55, 12.4, 0.6)
 
-  # 10 --- segments (slide-11 layout)
-  sg <- res$segments
-  x <- ns("Tailored support for each group of countries", "Different support for intensive-support, active-watch, focused-fix, sustain-gains and data-first countries")
-  df <- data.frame(a = "", b = sg$segment, c = ifelse(sg$segment == "Validate data first", paste(sg$n, ifelse(sg$n == 1, "country", "countries")), paste(sg$n, ifelse(sg$n == 1, "country", "countries"))),
-                   d = map_chr(sg$countries, ~ list_names(.x, 9)), e = sg$action, stringsAsFactors = FALSE)
-  x <- pp_add(x, ft_rows(df, sg$colour, c(0.25, 1.9, 1.15, 5.0, 4.1), 1.0), 0.45, 1.65, 12.4, 5.2)
-  both <- intersect(ct$country[ct$segment %in% c("Intensive support", "Active watch", "Focused fixes", "Sustain gains")], ct$country[ct$needs_validation])
-  x <- pp_txt(x, ifelse(length(both), sprintf("%s sit in two groups: they need their support group and a data check as well (data-first is a cross-cutting flag).", list_names(both, 8)), "Data-first is a cross-cutting flag: a country can be in a support group and still need its data checked."), 0.45, 6.9, 12.4, 0.4, 11, FALSE, COL$muted, "left", TRUE)
-
   # 10b --- alternative view of the support groups: heatmap matrix (why each country is in its group)
   if (file.exists(file.path(chdir, "10_support_groups_matrix.png"))) {
     x <- ns("Support groups at a glance", "Each row is a country; coloured cells show the standards behind its group: green = met, red = missed, grey = no data")
     x <- pp_img(x, file.path(chdir, "10_support_groups_matrix.png"), 0.8, 1.5, 11.7, 5.3)
     x <- pp_txt(x, "Group = colour block on the left. Grey = no result found for that standard.", 0.45, 6.95, 12.4, 0.4, 11, FALSE, COL$muted, "left", TRUE)
   }
-
-  # 11 --- priority countries (slide-12 layout)
-  pri <- ct %>% filter(segment == "Intensive support") %>% arrange(latest_score) %>% head(5)
-  pri_col <- COL$red; pri_title <- sprintf("%s require intensive support", ifelse(nrow(pri) == 1, "One country", paste(nrow(pri), "countries")))
-  if (!nrow(pri)) {   # nobody is in the strongest-support segment: show the lowest-scoring countries instead
-    pri <- ct %>% filter(!is.na(latest_score), latest_score < CFG$bands[2]) %>% arrange(latest_score) %>% head(5)
-    pri_col <- COL$orange; pri_title <- if (nrow(pri)) sprintf("%s score below %d%%: priority for active watch", ifelse(nrow(pri) == 1, "One country", paste(nrow(pri), "countries")), CFG$bands[2]) else "No country needs intensive support"
-  }
-  x <- ns(pri_title, "Bottlenecks differ from one country to the next, so the response must be tailored")
-  if (nrow(pri)) {
-    act <- map_chr(seq_len(nrow(pri)), function(i) {
-      k <- paste(pri$Country[i], pri$latest_response[i], pri$latest_round[i], sep = "|")
-      f <- res$long %>% filter(key == k, result == "No") %>% count(pillar) %>% left_join(count(IND, pillar, name = "tot"), by = "pillar") %>% mutate(share = n / tot) %>% arrange(desc(share), desc(n))
-      if (!nrow(f)) "Keep up the current performance" else { a <- ACTION_BY_PILLAR[[f$pillar[1]]]; paste0(toupper(substr(a, 1, 1)), substr(a, 2, nchar(a))) }
-    })
-    df <- data.frame(a = "", b = pri$country, c = paste0(pri$latest_score, " %", ifelse(pri$latest_is_last, "", "*")), d = act, e = paste("Standards missed:", ifelse(nzchar(pri$failed), pri$failed, "none")), stringsAsFactors = FALSE)
-    x <- pp_add(x, ft_rows(df, rep(pri_col, nrow(pri)), c(0.25, 1.9, 1.0, 4.6, 4.65), 0.95, sizes = c(14, 15, 12, 11)), 0.45, 1.65, 12.4, 0.95 * nrow(pri))
-  } else x <- pp_txt(x, "No country is in the intensive-support segment and none scores below the second band.", 0.45, 1.8, 12, 0.5, 16, FALSE, COL$muted)
-  x <- pp_txt(x, "* The newest campaign cannot be scored, so the score shown is from the latest scorable one. Standards missed = those not reached in that campaign.", 0.45, 6.8, 12.4, 0.5, 10.5, FALSE, COL$muted, "left", TRUE)
-
-  # 12 --- decisions table
-  x <- ns("Commitments to agree before the next round", "From findings to named owners, deadlines and proof of delivery")
-  dd <- res$decisions
-  ft <- flextable::flextable(dd) %>% flextable::set_header_labels(Action = "Action", Owner = "Owner", Timeline = "Timeline", Proof = "Proof of delivery") %>%
-    flextable::bg(part = "header", bg = COL$navy) %>% flextable::color(part = "header", color = "white") %>% flextable::bold(part = "header") %>% flextable::fontsize(size = 11, part = "header") %>%
-    flextable::fontsize(size = 12, part = "body") %>% flextable::font(fontname = FONT, part = "all") %>% flextable::color(color = COL$text, part = "body") %>% flextable::bold(j = 2, part = "body") %>% flextable::align(j = 2:3, align = "center", part = "all") %>%
-    flextable::border_remove() %>% flextable::border_inner_h(border = brd("#D5DDD8"), part = "body") %>% flextable::valign(valign = "center", part = "all") %>%
-    flextable::padding(padding.left = 8, padding.right = 8, padding.top = 6, padding.bottom = 6) %>% flextable::set_table_properties(layout = "fixed")
-  ft <- flextable::width(ft, j = 1, width = 5.6) %>% flextable::width(j = 2, width = 1.6) %>% flextable::width(j = 3, width = 2.2) %>% flextable::width(j = 4, width = 3.0) %>% flextable::height(height = 0.95, part = "body") %>% flextable::hrule(rule = "atleast")
-  x <- pp_add(x, ft, 0.45, 1.7, 12.4, 4.6)
-  x <- pp_add(x, ft_banner("Rule for every gap: a named owner, a deadline and written proof that it is closed.", 12.4, 0.6, COL$navy, "white", 15), 0.45, 6.55, 12.4, 0.6)
 
   print(x, target = file)
   invisible(file)
