@@ -648,18 +648,16 @@ ch_segment_matrix <- function(ct, long) {
   head_lab <- function(id) paste0(IND$label[match(id, IND$id)], "\n", ifelse(id == "DQ1", sprintf("target \u2264 %g d", CFG$delay_max_days), ifelse(id == "LQ1", sprintf("target = %g%%", CFG$lqas_scope_min),
                      ifelse(id == "COV1", sprintf("target \u2265 %g%%", CFG$share_ge95_std), sprintf("target \u2265 %g%%", CFG$lqas_pass_std)))))
   lv <- vapply(ids, head_lab, "")
-  lvl_all <- c("Support group", lv, "Data check")
+  lvl_all <- c("Support group", lv)
   d <- d %>% mutate(colf = factor(head_lab(id), levels = lvl_all), ctry = factor(as.character(country), levels = rev(cn)))
   gp <- keys %>% mutate(ctry = factor(as.character(country), levels = rev(cn)), seg = as.character(segment),
-                        gx = factor("Support group", levels = lvl_all), fx = factor("Data check", levels = lvl_all))
+                        gx = factor("Support group", levels = lvl_all))
   ggplot() +
     geom_tile(data = d, aes(colf, ctry, fill = result), colour = "white", linewidth = 1.2) +
     geom_text(data = d, aes(colf, ctry, label = lab, colour = result), size = 3, fontface = "bold") +
     geom_tile(data = gp, aes(gx, ctry, fill = seg), colour = "white", linewidth = 1.2) +
     geom_text(data = gp, aes(gx, ctry, label = seg), colour = "white", size = 3, fontface = "bold") +
-    geom_tile(data = gp, aes(fx, ctry, fill = ifelse(needs_validation, "flag", "noflag")), colour = "white", linewidth = 1.2) +
-    geom_text(data = gp, aes(fx, ctry, label = ifelse(needs_validation, "check data", "")), colour = "white", size = 3, fontface = "bold") +
-    scale_fill_manual(values = c(Yes = COL$green, No = COL$red, none = "#D3D8D2", flag = COL$blue, noflag = "#F1F4EF", seg_col), guide = "none") +
+    scale_fill_manual(values = c(Yes = COL$green, No = COL$red, none = "#D3D8D2", seg_col), guide = "none") +
     scale_colour_manual(values = c(Yes = "white", No = "white", none = "#5C6B66"), guide = "none") +
     scale_x_discrete(position = "top", drop = FALSE) +
     labs(title = "Support group of each country and the standards behind it (latest assessable campaign)", x = NULL, y = NULL) +
@@ -1275,7 +1273,7 @@ build_pptx <- function(res, file, chdir) {
   if (file.exists(file.path(chdir, "10_support_groups_matrix.png"))) {
     x <- ns("Support groups at a glance", "Each row is a country; coloured cells show the standards behind its group: green = met, red = missed, grey = no data")
     x <- pp_img(x, file.path(chdir, "10_support_groups_matrix.png"), 0.8, 1.5, 11.7, 5.3)
-    x <- pp_txt(x, "Group = colour block on the left. \"check data\" = the data must be completed or explained before the result is trusted (cross-cutting flag).", 0.45, 6.95, 12.4, 0.4, 11, FALSE, COL$muted, "left", TRUE)
+    x <- pp_txt(x, "Group = colour block on the left. Grey = no result found for that standard.", 0.45, 6.95, 12.4, 0.4, 11, FALSE, COL$muted, "left", TRUE)
   }
 
   # 11 --- priority countries (slide-12 layout)
