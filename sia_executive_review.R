@@ -529,7 +529,7 @@ ch_lqas_all <- function(lt) {
     scale_colour_manual(values = c(`FALSE` = COL$text, `TRUE` = COL$muted), guide = "none") +
     scale_fill_manual(values = cols, guide = "none") +
     scale_y_continuous(limits = c(0, 118), breaks = seq(0, 100, 25), labels = function(x) paste0(x, "%"), expand = c(0, 0)) +
-    labs(title = "Proportion of LQAS districts passed, all campaigns") + theme_sia() +
+    labs(title = "Proportion of LQAS districts passed, all campaign rounds") + theme_sia() +
     theme(strip.text = element_text(face = "bold", colour = COL$navy), panel.grid.major.y = element_line(colour = "#E9EEEA"), panel.grid.major.x = element_blank())
 }
 
@@ -618,15 +618,17 @@ ch_heat <- function(ct, long) {
     lab = ifelse(id == "DQ1", ifelse(value < 0, "date error", ifelse(value > cap, sprintf("> %d d", cap), sprintf("%.0f d", value))), ifelse(id == "DQ2", "", sprintf("%.0f%%", value))))
   have <- d %>% filter(result != "N/E", !is.na(value))
   ne <- d %>% filter(result == "N/E" | is.na(value))
+  pad <- d %>% filter(id == "DQ1") %>% slice(1) %>% mutate(xv = cap * 1.25)   # extra room on the right of the reporting panel so "> 60 d" is not cut
   ggplot() +
     geom_segment(data = have, aes(x = 0, xend = xv, y = country, yend = country), colour = "#D3D8D2", linewidth = 0.9) +
     geom_vline(data = d %>% distinct(label, thr), aes(xintercept = thr), colour = COL$navy, linetype = "dashed", linewidth = 0.6) +
     geom_point(data = have, aes(xv, country, colour = cls), size = 3.6) +
     geom_text(data = have, aes(xv, country, label = lab), hjust = -0.35, size = 2.7, colour = COL$text) +
     geom_text(data = ne, aes(x = 0, y = country, label = ifelse(result == "N/E", "N/E", "no data")), hjust = -0.2, size = 2.6, colour = "#9AA5A3", fontface = "italic") +
+    geom_blank(data = pad, aes(xv, country)) +
     facet_wrap(~label, nrow = 1, scales = "free_x") +
     scale_colour_manual(values = c(Yes = COL$green, No = COL$red, `N/E` = "#D3D8D2"), breaks = c("Yes", "No"), labels = c("Standard met", "Standard missed")) +
-    scale_x_continuous(expand = expansion(mult = c(0.01, 0.2)), breaks = function(l) if (l[2] > 100) c(0, 25, 50, 75, 100) else pretty(l, 4)) +
+    scale_x_continuous(expand = expansion(mult = c(0.01, 0.2)), breaks = function(l) if (l[2] > 100) c(0, 25, 50, 75, 100) else pretty(c(0, cap), 4)) +
     labs(title = "Where each country stands on every standard, latest assessable campaign (dashed line = target)") +
     theme_sia(10) + theme(strip.text = element_text(size = 8.5, face = "bold", colour = COL$navy, lineheight = 0.95), axis.text.x = element_text(size = 7.5),
                           panel.grid.major.y = element_line(colour = "#EEF2EE"), panel.grid.major.x = element_line(colour = "#EEF2EE"), panel.spacing.x = grid::unit(0.9, "lines"))
@@ -1088,7 +1090,7 @@ build_pptx <- function(res, file, chdir) {
   x <- pp_txt(x, header, 0.9, 1.7, 11.5, 0.4, 14, FALSE, "#BDE0DC", italic = TRUE)
   x <- pp_txt(x, CFG$title, 0.9, 2.2, 11.5, 1.8, 38, TRUE, "white", font = SERIF)
   x <- pp_txt(x, "Scores, trends, data reliability, priorities and next steps by country", 0.9, 4.15, 11.5, 0.5, 18, FALSE, "#D7ECEA")
-  x <- pp_txt(x, sprintf("%s | %d countries | %d campaigns (%d rounds) scored", span, K$n_countries, n_distinct(paste(res$camp$country, res$camp$Response)), K$n_campaigns), 0.9, 6.3, 11.5, 0.4, 15, FALSE, "white")
+  x <- pp_txt(x, sprintf("%s | %d countries | %d campaign rounds", span, K$n_countries, { cr <- suppressWarnings(sum(res$lqas_t$all$campaigns, na.rm = TRUE)); if (is.finite(cr) && cr > 0) as.integer(cr) else K$n_campaigns }), 0.9, 6.3, 11.5, 0.4, 15, FALSE, "white")
 
   # 2 --- method
   x <- ns("How the scores are built", "One transparent rule applied to every campaign round, so countries can be compared fairly")
@@ -1172,16 +1174,16 @@ build_pptx <- function(res, file, chdir) {
   lt <- res$lqas_t
   if (length(lt$periods)) {
     a_ <- lt$all; pp <- lt$periods
-    x <- ns(sprintf("LQAS: proportion passed, %s", paste(pp, collapse = " vs ")), "Share of LQAS districts passed, all campaigns with LQAS results")
+    x <- ns(sprintf("LQAS: proportion passed, %s", paste(pp, collapse = " vs ")), "Share of LQAS districts passed, all campaign rounds with LQAS results")
     x <- pp_img(x, file.path(chdir, "06_lqas_passed_all.png"), 0.45, 1.6, 8.6, 5.0)
     big <- function(i) if (i <= nrow(a_) && a_$lots[i] > 0) comma(a_$passed[i]) else "n/a"
     if (all(a_$lots == 0)) {
       x <- pp_add(x, ft_banner(sprintf("No LQAS result in the LQAS file for %s. LQAS data end on %s. Add the recent LQAS file (--lqas) and rerun to fill this slide.", paste(pp, collapse = " and "), ifelse(is.na(K$lqas_max), "n/a", format(K$lqas_max))), 3.4, 3.4, COL$orange, "white", 14), 9.45, 1.7, 3.4, 3.4)
     } else
-    x <- pp_add(x, ft_tile(big(nrow(a_)), COL$navy, sprintf("Districts passed in %s", a_$period[nrow(a_)]), sprintf("of %s districts\n%d campaigns \u00B7 %d countries", comma(a_$lots[nrow(a_)]), a_$campaigns[nrow(a_)], a_$countries[nrow(a_)]), 3.4, 1.55), 9.45, 1.7, 3.4, 1.55)
+    x <- pp_add(x, ft_tile(big(nrow(a_)), COL$navy, sprintf("Districts passed in %s", a_$period[nrow(a_)]), sprintf("of %s districts\n%d campaign rounds \u00B7 %d countries", comma(a_$lots[nrow(a_)]), a_$campaigns[nrow(a_)], a_$countries[nrow(a_)]), 3.4, 1.55), 9.45, 1.7, 3.4, 1.55)
     if (all(a_$lots == 0)) NULL else if (nrow(a_) >= 2) {
       dlt <- if (all(a_$lots > 0)) a_$rate[2] - a_$rate[1] else NA_real_
-      x <- pp_add(x, ft_tile(big(1), COL$muted, sprintf("Districts passed in %s", a_$period[1]), sprintf("of %s districts\n%d campaigns \u00B7 %d countries", comma(a_$lots[1]), a_$campaigns[1], a_$countries[1]), 3.4, 1.55), 9.45, 3.45, 3.4, 1.55)
+      x <- pp_add(x, ft_tile(big(1), COL$muted, sprintf("Districts passed in %s", a_$period[1]), sprintf("of %s districts\n%d campaign rounds \u00B7 %d countries", comma(a_$lots[1]), a_$campaigns[1], a_$countries[1]), 3.4, 1.55), 9.45, 3.45, 3.4, 1.55)
       x <- pp_add(x, ft_tile(ifelse(is.na(dlt), "n/a", sprintf("%+.1f pts", dlt)), ifelse(is.na(dlt), COL$muted, ifelse(dlt >= 0, COL$green, COL$red)), "Change in districts passed", sprintf("%s to %s", a_$period[1], a_$period[2]), 3.4, 1.55), 9.45, 5.2, 3.4, 1.55)
     }
     zm <- res$zoom %||% CFG$zoom_countries; z_ <- lt$zoom
