@@ -1233,7 +1233,7 @@ build_pptx <- function(res, file, chdir) {
   # 9 --- data quality
   x <- ns("Reliable data come first", "Late reports, mismatched codes and missing LQAS can hide poor results or flatter good ones")
   nea <- res$camp %>% filter(!small, !evaluable)
-  x <- pp_add(x, ft_tile(K$n_campaigns, COL$navy, "Rounds in scope", sprintf("%d scorable, %d N/E", K$n_eval, K$n_ne), 2.6, 1.4), 0.45, 1.7, 2.6, 1.4)
+  x <- pp_add(x, ft_tile(K$n_campaigns, COL$navy, "Rounds scored", sprintf("rounds with admin data (the calendar lists %d)", { cr <- suppressWarnings(sum(res$lqas_t$all$campaigns, na.rm = TRUE)); if (is.finite(cr) && cr > 0) as.integer(cr) else K$n_campaigns }), 2.6, 1.4), 0.45, 1.7, 2.6, 1.4)
   nim <- if ("im_src" %in% names(res$camp)) sum(res$camp$im_src %in% "no IM result found") else NA_integer_
   if (!is.na(nim) && any(res$camp$im_src %in% c("campaign code", "country, round and date", "no IM result found"))) {
     x <- pp_add(x, ft_tile(sprintf("%d of %d", nim, K$n_campaigns), COL$red, "Rounds without IM", "no independent-monitoring result found (counted as not met)", 2.6, 1.4), 3.25, 1.7, 2.6, 1.4)
@@ -1242,11 +1242,12 @@ build_pptx <- function(res, file, chdir) {
   }
   x <- pp_add(x, ft_tile(ifelse(is.finite(K$med_delay_all), sprintf("%.0f d", K$med_delay_all), "n/a"), COL$orange, "Median report delay", sprintf("standard: %d days or less", CFG$delay_max_days), 2.6, 1.4), 0.45, 3.3, 2.6, 1.4)
   x <- pp_add(x, ft_tile(ifelse(is.na(K$lq_scope_pct_all), "n/a", pct(K$lq_scope_pct_all, 0)), COL$orange, "LQAS reach", "of districts in scope have an LQAS result", 2.6, 1.4), 3.25, 3.3, 2.6, 1.4)
-  x <- pp_img(x, file.path(chdir, "05_data_quality.png"), 6.2, 1.6, 6.7, 3.2)
+  x <- pp_img(x, file.path(chdir, "05_data_quality.png"), 6.2, 1.6, 6.7, 4.7)
   ne_txt <- if (nrow(nea)) paste0(nea$country, " (", nea$Round_Add, ", ", nea$month, ")", collapse = "  \u00B7  ") else "Every campaign could be scored."
-  x <- pp_txt(x, "Campaigns that could not be scored", 0.45, 4.95, 8, 0.35, 14, TRUE, COL$navy)
-  x <- pp_txt(x, ne_txt, 0.45, 5.3, 12.4, 0.8, 12.5, FALSE, COL$text)
-  x <- pp_txt(x, sprintf("%d campaign code(s) point to another country; %d scored campaign(s) rest on thin evidence.", K$n_code_bad, K$n_limited), 0.45, 6.05, 12.4, 0.4, 12, FALSE, COL$muted)
+  if (nrow(nea)) {   # shown only when some campaigns could not be scored
+    x <- pp_txt(x, "Campaigns that could not be scored", 0.45, 4.95, 8, 0.35, 14, TRUE, COL$navy)
+    x <- pp_txt(x, ne_txt, 0.45, 5.3, 12.4, 0.8, 12.5, FALSE, COL$text)
+  }
 
   # 10b --- alternative view of the support groups: heatmap matrix (why each country is in its group)
   if (file.exists(file.path(chdir, "10_support_groups_matrix.png"))) {
@@ -1323,7 +1324,7 @@ run_sia_review <- function(admin_file = NULL, lqas_file = NULL, from = NULL, to 
   save_png(ch_pillar(pt), file.path(chdir, "03_indicators_by_period.png"), 7.6, 5.4)
   save_png(ch_heat(ct, long), file.path(chdir, "04_indicator_heatmap.png"), 11.7, max(4.5, 0.26 * K$n_countries_scored + 1.6))
   { sm <- tryCatch(ch_segment_matrix(ct, long), error = function(e) { msg("Segment matrix failed:", conditionMessage(e)); NULL }); if (!is.null(sm)) save_png(sm, file.path(chdir, "10_support_groups_matrix.png"), 11.7, 5.3) }
-  save_png(ch_dq(camp, long), file.path(chdir, "05_data_quality.png"), 6.7, 3.2)
+  save_png(ch_dq(camp, long), file.path(chdir, "05_data_quality.png"), 6.7, 4.7)
   save_png(ch_refusal(camp), file.path(chdir, "08_refusals_lq4.png"), 8.6, max(4.2, 0.26 * nrow(latest_lqas_campaign(camp)) + 1.4))
   save_png(ch_im(res$imq), file.path(chdir, "09_im_social_mobilisation_vs_coverage.png"), 9.2, 5.6)
   save_png(ch_lqas_all(lt), file.path(chdir, "06_lqas_passed_all.png"), 8.6, 5)
