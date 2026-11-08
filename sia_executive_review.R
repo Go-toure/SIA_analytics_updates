@@ -76,7 +76,7 @@ CFG <- list(
   delay_max_days = 14,    # median days between the campaign and its report
   report_min_share = 50,  # % of districts with a report date needed to judge timeliness
   lqas_pass_std  = 80,    # % of LQAS lots (districts) that must pass
-  lqas_scope_min = 80,    # % of the districts in scope that must have an LQAS result to count as "LQAS conducted" (working default, to be confirmed)
+  lqas_scope_min = 100,   # % of the districts in scope that must have an LQAS result to count as "LQAS conducted" (target: every district in scope)
   informed_std   = 90,    # % of caregivers informed before the campaign
   noncomp_max    = 2,     # max % of sampled children missed because of refusal
   lqas_grace_days = 30,   # LQAS results are expected within this many days
@@ -105,7 +105,7 @@ IND <- tribble(
   "COV1", "Coverage",           "Districts at \u2265 95%",    "At least {share_ge95_std}% of districts reach {cov_std}% coverage or more",
   "DQ1",  "Data quality",       "Timely reporting",          "Median report delay of at most {delay_max_days} days",
   "DQ2",  "Data quality",       "Consistent campaign code",  "Campaign code matches the country",
-  "LQ1",  "LQAS verification",  "LQAS conducted",            "At least {lqas_scope_min}% of the districts in scope have an LQAS result (districts in scope compared with districts in LQAS)",
+  "LQ1",  "LQAS verification",  "LQAS conducted",            "{lqas_scope_min}% of the districts in scope have an LQAS result (districts in scope compared with districts in LQAS)",
   "LQ2",  "LQAS verification",  "LQAS accepted",             "At least {lqas_pass_std}% of the LQAS districts pass"
 )
 IND$standard_text <- map_chr(IND$standard_text, function(s) {
@@ -581,12 +581,17 @@ ch_heat <- function(ct, long) {
   keep <- IND$id[IND$id != "DQ2" | any(d$id == "DQ2" & d$result == "No")]
   d <- d %>% filter(id %in% keep)
   thr <- tibble(id = c("COV1", "DQ1", "LQ1", "LQ2", "DQ2"), thr = c(CFG$share_ge95_std, CFG$delay_max_days, CFG$lqas_scope_min, CFG$lqas_pass_std, 1))
+  ord <- intersect(c("LQ1", "COV1", "LQ2", "DQ1", "DQ2"), keep)   # panel order requested by the supervisor
   cap <- 60
+  # countries listed in decreasing order of "LQAS conducted" (highest at the top); those without a value at the bottom
+  lq <- d %>% filter(id == "LQ1") %>% distinct(country, value)
+  allc <- unique(as.character(d$country))
+  corder <- c(setdiff(allc, lq$country[!is.na(lq$value)]), as.character(lq$country[order(lq$value)][!is.na(lq$value[order(lq$value)])]))
+  tgt <- function(id, t) ifelse(id == "DQ1", sprintf("median days, target \u2264 %g", t), ifelse(id == "DQ2", "1 = code matches country", ifelse(id == "LQ1", sprintf("%%, target = %g", t), sprintf("%%, target \u2265 %g", t))))
+  lvl <- paste0(IND$label[match(ord, IND$id)], "\n", tgt(ord, thr$thr[match(ord, thr$id)]))
   d <- d %>% left_join(thr, by = "id") %>% mutate(
-    label = factor(paste0(label, "\n", ifelse(id == "DQ1", sprintf("median days, target \u2264 %g", thr), ifelse(id == "DQ2", "1 = code matches country", sprintf("%%, target \u2265 %g", thr)))),
-                   levels = unique(paste0(IND$label[IND$id %in% keep], "\n", ifelse(IND$id[IND$id %in% keep] == "DQ1", sprintf("median days, target \u2264 %g", CFG$delay_max_days),
-                            ifelse(IND$id[IND$id %in% keep] == "DQ2", "1 = code matches country", sprintf("%%, target \u2265 %g", ifelse(IND$id[IND$id %in% keep] == "COV1", CFG$share_ge95_std, ifelse(IND$id[IND$id %in% keep] == "LQ1", CFG$lqas_scope_min, CFG$lqas_pass_std)))))))),
-    country = fct_reorder(country, latest_score), xv = ifelse(id == "DQ1", pmin(pmax(value, 0), cap), value),
+    label = factor(paste0(label, "\n", tgt(id, thr)), levels = unique(lvl)),
+    country = factor(country, levels = corder), xv = ifelse(id == "DQ1", pmin(pmax(value, 0), cap), value),
     cls = factor(result, levels = c("Yes", "No", "N/E")),
     lab = ifelse(id == "DQ1", ifelse(value < 0, "date error", ifelse(value > cap, sprintf("> %d d", cap), sprintf("%.0f d", value))), ifelse(id == "DQ2", "", sprintf("%.0f%%", value))))
   have <- d %>% filter(result != "N/E", !is.na(value))
@@ -768,8 +773,9 @@ reading_notes <- function(res) {
   lq <- ifelse(is.na(K$lqas_max), "no LQAS data were found", sprintf("LQAS data end on %s; later campaigns have no LQAS result yet and are not penalised", format(K$lqas_max)))
   lim <- list(list(label = "Standards: ", value = "working defaults (workbook, sheet Standards) to be confirmed by the technical team", col = COL$navy),
               list(label = "Coverage: ", value = "administrative coverage, not an independent verification; co-administered vaccines are collapsed by district", col = COL$navy),
-              list(label = "LQAS conducted: ", value = sprintf("districts in the campaign scope (Scope file) compared with districts that have an LQAS result; threshold %d%% of districts is a working default to confirm", CFG$lqas_scope_min), col = COL$navy),
+              list(label = "LQAS conducted: ", value = sprintf("districts in the campaign scope (Scope file) compared with districts that have an LQAS result; target: %d%% of the districts in scope", CFG$lqas_scope_min), col = COL$navy),
               list(label = "LQAS: ", value = lq, col = COL$navy),
+              list(label = "LQAS districts passed: ", value = "a district passes LQAS when it meets the decision rule recorded in the LQAS file; results are grouped by the quarter of the LQAS date; campaigns are the rounds of the campaign calendar (Finished or In Progress; rounds on hold are excluded) that started in the quarter", col = COL$navy),
               list(label = "Shown, not scored: ", value = sprintf("LQ4 refusals (at most %g%% of sampled children) and the IM social-mobilisation view (awareness 80%%, coverage 90%%) inform the discussion but do not change the score", CFG$noncomp_max), col = COL$navy),
               list(label = "Comparisons: ", value = "quarters can include different countries and campaigns; changes are indicative", col = COL$navy),
               list(label = "Not included: ", value = "financing and microplan timeliness; IM results enter only through the awareness-vs-coverage view", col = COL$navy))
@@ -1123,7 +1129,6 @@ build_pptx <- function(res, file, chdir) {
       x <- pp_add(x, ft_tile(big(1), COL$muted, sprintf("Districts passed in %s", a_$period[1]), sprintf("of %s districts\n%d campaigns \u00B7 %d countries", comma(a_$lots[1]), a_$campaigns[1], a_$countries[1]), 3.4, 1.55), 9.45, 3.45, 3.4, 1.55)
       x <- pp_add(x, ft_tile(ifelse(is.na(dlt), "n/a", sprintf("%+.1f pts", dlt)), ifelse(is.na(dlt), COL$muted, ifelse(dlt >= 0, COL$green, COL$red)), "Change in districts passed", sprintf("%s to %s", a_$period[1], a_$period[2]), 3.4, 1.55), 9.45, 5.2, 3.4, 1.55)
     }
-    x <- pp_txt(x, sprintf("A district passes LQAS when it meets the decision rule recorded in the LQAS file. Results are grouped by the quarter of the LQAS date. Campaigns are the rounds of the campaign calendar (Finished or In Progress; rounds on hold are excluded) that started in the quarter. LQAS data end on %s.", ifelse(is.na(K$lqas_max), "n/a", format(K$lqas_max))), 0.45, 6.75, 12.4, 0.5, 10.5, FALSE, COL$muted)
     zm <- res$zoom %||% CFG$zoom_countries; z_ <- lt$zoom
     x <- ns(sprintf("LQAS zoom on %d countries", length(zm)), sprintf("%s: proportion of districts passed, %s", paste(zm, collapse = " \u00B7 "), paste(pp, collapse = " vs ")))
     x <- pp_img(x, file.path(chdir, "07_lqas_passed_zoom.png"), 0.45, 1.6, 8.6, 5.0)
