@@ -1220,7 +1220,7 @@ build_pptx <- function(res, file, chdir) {
     x <- pp_img(x, file.path(chdir, "09_im_social_mobilisation_vs_coverage.png"), 0.45, 1.55, 8.7, 5.4)
     x <- pp_add(x, ft_tile(pct(100 * nq[[4]] / nrow(iq), 0), COL$green, "High awareness + good coverage", sprintf("%s of %s districts", comma(nq[[4]]), comma(nrow(iq))), 3.5, 1.3), 9.4, 1.65, 3.5, 1.3)
     x <- pp_add(x, ft_tile(comma(nq[[1]] + nq[[2]]), COL$orange, "Districts below 80% awareness", sprintf("%s also below 90%% coverage", comma(nq[[1]])), 3.5, 1.3), 9.4, 3.05, 3.5, 1.3)
-    x <- pp_add(x, ft_tile(comma(nq[[3]]), COL$purple, "High awareness but low coverage", "check operations and microplans", 3.5, 1.3), 9.4, 4.45, 3.5, 1.3)
+    x <- pp_add(x, ft_tile(comma(nq[[3]]), COL$purple, "High awareness but low coverage", "districts (awareness \u2265 80%, coverage < 90%): check operations and microplans", 3.5, 1.3), 9.4, 4.45, 3.5, 1.3)
     x <- pp_txt(x, ifelse(nrow(top), paste0("Most low-awareness districts: ", paste0(top$cname, " (", top$n, ")", collapse = " \u00B7 ")), ""), 9.4, 5.85, 3.5, 0.6, 11, FALSE, COL$text)
     x <- pp_add(x, ft_banner("Advocacy: intensify pre-campaign mobilisation where awareness is below 80%.", 12.4, 0.5, COL$navy, "white", 13), 0.45, 6.95, 12.4, 0.4)
   }
