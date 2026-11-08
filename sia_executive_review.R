@@ -105,7 +105,7 @@ IND <- tribble(
   "COV1", "Coverage",           "IM districts at \u2265 95%", "At least {share_ge95_std}% of the districts monitored by independent monitoring (IM) reach {cov_std}% coverage or more",
   "DQ1",  "Data quality",       "Timely reporting",          "Median report delay of at most {delay_max_days} days",
   "DQ2",  "Data quality",       "Consistent campaign code",  "Campaign code matches the country",
-  "LQ1",  "LQAS verification",  "LQAS conducted",            "{lqas_scope_min}% of the districts in scope have an LQAS result (districts in scope compared with districts in LQAS)",
+  "LQ1",  "LQAS verification",  "Districts conducted LQAS based on the scope", "{lqas_scope_min}% of the districts in scope have an LQAS result (districts in scope compared with districts in LQAS)",
   "LQ2",  "LQAS verification",  "LQAS accepted",             "At least {lqas_pass_std}% of the LQAS districts pass"
 )
 IND$standard_text <- map_chr(IND$standard_text, function(s) {
@@ -609,9 +609,10 @@ ch_heat <- function(ct, long) {
   allc <- unique(as.character(d$country))
   corder <- c(setdiff(allc, lq$country[!is.na(lq$value)]), as.character(lq$country[order(lq$value)][!is.na(lq$value[order(lq$value)])]))
   tgt <- function(id, t) ifelse(id == "DQ1", sprintf("median days, target \u2264 %g", t), ifelse(id == "DQ2", "1 = code matches country", ifelse(id == "LQ1", sprintf("%%, target = %g", t), sprintf("%%, target \u2265 %g", t))))
-  lvl <- paste0(IND$label[match(ord, IND$id)], "\n", tgt(ord, thr$thr[match(ord, thr$id)]))
+  wl <- function(s) stringr::str_wrap(s, 26)
+  lvl <- paste0(wl(IND$label[match(ord, IND$id)]), "\n", tgt(ord, thr$thr[match(ord, thr$id)]))
   d <- d %>% left_join(thr, by = "id") %>% mutate(
-    label = factor(paste0(label, "\n", tgt(id, thr)), levels = unique(lvl)),
+    label = factor(paste0(wl(label), "\n", tgt(id, thr)), levels = unique(lvl)),
     country = factor(country, levels = corder), xv = ifelse(id == "DQ1", pmin(pmax(value, 0), cap), value),
     cls = factor(result, levels = c("Yes", "No", "N/E")),
     lab = ifelse(id == "DQ1", ifelse(value < 0, "date error", ifelse(value > cap, sprintf("> %d d", cap), sprintf("%.0f d", value))), ifelse(id == "DQ2", "", sprintf("%.0f%%", value))))
@@ -645,7 +646,7 @@ ch_segment_matrix <- function(ct, long) {
   d <- d %>% mutate(result = ifelse(is.na(result) | is.na(value), "none", result),
                     lab = ifelse(result == "none", "no data", ifelse(id == "DQ1", ifelse(value < 0, "date error", ifelse(value > 60, "> 60 d", sprintf("%.0f d", value))), sprintf("%.0f%%", value))),
                     col = IND$label[match(id, IND$id)])
-  head_lab <- function(id) paste0(IND$label[match(id, IND$id)], "\n", ifelse(id == "DQ1", sprintf("target \u2264 %g d", CFG$delay_max_days), ifelse(id == "LQ1", sprintf("target = %g%%", CFG$lqas_scope_min),
+  head_lab <- function(id) paste0(stringr::str_wrap(IND$label[match(id, IND$id)], 26), "\n", ifelse(id == "DQ1", sprintf("target \u2264 %g d", CFG$delay_max_days), ifelse(id == "LQ1", sprintf("target = %g%%", CFG$lqas_scope_min),
                      ifelse(id == "COV1", sprintf("target \u2265 %g%%", CFG$share_ge95_std), sprintf("target \u2265 %g%%", CFG$lqas_pass_std)))))
   lv <- vapply(ids, head_lab, "")
   lvl_all <- c("Support group", lv)
@@ -827,7 +828,7 @@ reading_notes <- function(res) {
   lq <- ifelse(is.na(K$lqas_max), "no LQAS data were found", sprintf("LQAS data end on %s; later campaigns have no LQAS result yet and are not penalised", format(K$lqas_max)))
   lim <- list(list(label = "Standards: ", value = "working defaults (workbook, sheet Standards) to be confirmed by the technical team", col = COL$navy),
               list(label = "Coverage: ", value = "coverage standard (IM districts at 95% or more) is computed from the independent monitoring (IM) data; a campaign without IM results counts as not met; administrative coverage is kept in the workbook for reference", col = COL$navy),
-              list(label = "LQAS conducted: ", value = sprintf("districts in the campaign scope (Scope file) compared with districts that have an LQAS result; target: %d%% of the districts in scope", CFG$lqas_scope_min), col = COL$navy),
+              list(label = "Districts conducted LQAS based on the scope: ", value = sprintf("districts in the campaign scope (Scope file) compared with districts that have an LQAS result; target: %d%% of the districts in scope", CFG$lqas_scope_min), col = COL$navy),
               list(label = "LQAS: ", value = lq, col = COL$navy),
               list(label = "LQAS districts passed: ", value = "a district passes LQAS when it meets the decision rule recorded in the LQAS file; results are grouped by the quarter of the LQAS date; campaigns are the rounds of the campaign calendar (Finished or In Progress; rounds on hold are excluded) that started in the quarter", col = COL$navy),
               list(label = "Shown, not scored: ", value = sprintf("LQ4 refusals (at most %g%% of sampled children) and the IM social-mobilisation view (awareness 80%%, coverage 90%%) inform the discussion but do not change the score", CFG$noncomp_max), col = COL$navy),
