@@ -631,6 +631,41 @@ ch_heat <- function(ct, long) {
                           panel.grid.major.y = element_line(colour = "#EEF2EE"), panel.grid.major.x = element_line(colour = "#EEF2EE"), panel.spacing.x = grid::unit(0.9, "lines"))
 }
 
+# Support groups at a glance: one row per country, grouped by support group, one coloured cell per standard (why a country is in its group)
+ch_segment_matrix <- function(ct, long) {
+  seg_ord <- c("Intensive support", "Active watch", "Focused fixes", "Sustain gains")
+  seg_col <- c("Intensive support" = COL$red, "Active watch" = COL$orange, "Focused fixes" = COL$navy, "Sustain gains" = COL$green)
+  ids <- c("LQ1", "COV1", "LQ2", "DQ1")
+  keys <- ct %>% filter(segment %in% seg_ord) %>% transmute(country, segment, needs_validation, latest_score, key = paste(Country, latest_response, latest_round, sep = "|"))
+  if (!nrow(keys)) return(NULL)
+  keys <- keys %>% mutate(segment = factor(segment, levels = seg_ord)) %>% arrange(segment, latest_score)
+  cn <- as.character(keys$country)
+  d <- keys %>% select(country, key) %>% tidyr::crossing(id = ids) %>%
+    left_join(long %>% select(key, country, id, value, result), by = c("key", "country", "id"))
+  d <- d %>% mutate(result = ifelse(is.na(result) | is.na(value), "none", result),
+                    lab = ifelse(result == "none", "no data", ifelse(id == "DQ1", ifelse(value < 0, "date error", ifelse(value > 60, "> 60 d", sprintf("%.0f d", value))), sprintf("%.0f%%", value))),
+                    col = IND$label[match(id, IND$id)])
+  head_lab <- function(id) paste0(IND$label[match(id, IND$id)], "\n", ifelse(id == "DQ1", sprintf("target \u2264 %g d", CFG$delay_max_days), ifelse(id == "LQ1", sprintf("target = %g%%", CFG$lqas_scope_min),
+                     ifelse(id == "COV1", sprintf("target \u2265 %g%%", CFG$share_ge95_std), sprintf("target \u2265 %g%%", CFG$lqas_pass_std)))))
+  lv <- vapply(ids, head_lab, "")
+  lvl_all <- c("Support group", lv, "Data check")
+  d <- d %>% mutate(colf = factor(head_lab(id), levels = lvl_all), ctry = factor(as.character(country), levels = rev(cn)))
+  gp <- keys %>% mutate(ctry = factor(as.character(country), levels = rev(cn)), seg = as.character(segment),
+                        gx = factor("Support group", levels = lvl_all), fx = factor("Data check", levels = lvl_all))
+  ggplot() +
+    geom_tile(data = d, aes(colf, ctry, fill = result), colour = "white", linewidth = 1.2) +
+    geom_text(data = d, aes(colf, ctry, label = lab, colour = result), size = 3, fontface = "bold") +
+    geom_tile(data = gp, aes(gx, ctry, fill = seg), colour = "white", linewidth = 1.2) +
+    geom_text(data = gp, aes(gx, ctry, label = seg), colour = "white", size = 3, fontface = "bold") +
+    geom_tile(data = gp, aes(fx, ctry, fill = ifelse(needs_validation, "flag", "noflag")), colour = "white", linewidth = 1.2) +
+    geom_text(data = gp, aes(fx, ctry, label = ifelse(needs_validation, "check data", "")), colour = "white", size = 3, fontface = "bold") +
+    scale_fill_manual(values = c(Yes = COL$green, No = COL$red, none = "#D3D8D2", flag = COL$blue, noflag = "#F1F4EF", seg_col), guide = "none") +
+    scale_colour_manual(values = c(Yes = "white", No = "white", none = "#5C6B66"), guide = "none") +
+    scale_x_discrete(position = "top", drop = FALSE) +
+    labs(title = "Support group of each country and the standards behind it (latest assessable campaign)", x = NULL, y = NULL) +
+    theme_sia(10) + theme(panel.grid = element_blank(), axis.text.x = element_text(size = 8.5, face = "bold", colour = COL$navy, lineheight = 0.95), axis.text.y = element_text(size = 9))
+}
+
 ch_dq <- function(camp, long) {
   d <- long %>% filter(evaluable, pillar == "Data quality", result != "N/E") %>% group_by(label, period, period_key) %>%
     summarise(rate = 100 * mean(result == "No"), .groups = "drop")
@@ -1236,6 +1271,13 @@ build_pptx <- function(res, file, chdir) {
   both <- intersect(ct$country[ct$segment %in% c("Intensive support", "Active watch", "Focused fixes", "Sustain gains")], ct$country[ct$needs_validation])
   x <- pp_txt(x, ifelse(length(both), sprintf("%s sit in two groups: they need their support group and a data check as well (data-first is a cross-cutting flag).", list_names(both, 8)), "Data-first is a cross-cutting flag: a country can be in a support group and still need its data checked."), 0.45, 6.9, 12.4, 0.4, 11, FALSE, COL$muted, "left", TRUE)
 
+  # 10b --- alternative view of the support groups: heatmap matrix (why each country is in its group)
+  if (file.exists(file.path(chdir, "10_support_groups_matrix.png"))) {
+    x <- ns("Support groups at a glance", "Each row is a country; coloured cells show the standards behind its group: green = met, red = missed, grey = no data")
+    x <- pp_img(x, file.path(chdir, "10_support_groups_matrix.png"), 0.8, 1.5, 11.7, 5.3)
+    x <- pp_txt(x, "Group = colour block on the left. \"check data\" = the data must be completed or explained before the result is trusted (cross-cutting flag).", 0.45, 6.95, 12.4, 0.4, 11, FALSE, COL$muted, "left", TRUE)
+  }
+
   # 11 --- priority countries (slide-12 layout)
   pri <- ct %>% filter(segment == "Intensive support") %>% arrange(latest_score) %>% head(5)
   pri_col <- COL$red; pri_title <- sprintf("%s require intensive support", ifelse(nrow(pri) == 1, "One country", paste(nrow(pri), "countries")))
@@ -1334,6 +1376,7 @@ run_sia_review <- function(admin_file = NULL, lqas_file = NULL, from = NULL, to 
   save_png(ch_trend(ct), file.path(chdir, "02_trajectories.png"), 8, 5)
   save_png(ch_pillar(pt), file.path(chdir, "03_indicators_by_period.png"), 7.6, 5.4)
   save_png(ch_heat(ct, long), file.path(chdir, "04_indicator_heatmap.png"), 11.7, max(4.5, 0.26 * K$n_countries_scored + 1.6))
+  { sm <- tryCatch(ch_segment_matrix(ct, long), error = function(e) { msg("Segment matrix failed:", conditionMessage(e)); NULL }); if (!is.null(sm)) save_png(sm, file.path(chdir, "10_support_groups_matrix.png"), 11.7, 5.3) }
   save_png(ch_dq(camp, long), file.path(chdir, "05_data_quality.png"), 6.7, 3.2)
   save_png(ch_refusal(camp), file.path(chdir, "08_refusals_lq4.png"), 8.6, max(4.2, 0.26 * nrow(latest_lqas_campaign(camp)) + 1.4))
   save_png(ch_im(res$imq), file.path(chdir, "09_im_social_mobilisation_vs_coverage.png"), 9.2, 5.6)
