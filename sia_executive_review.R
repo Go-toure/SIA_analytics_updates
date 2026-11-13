@@ -1490,7 +1490,10 @@ run_sia_review <- function(admin_file = NULL, lqas_file = NULL, from = NULL, to 
   saveRDS(res, file.path(out_dir, "SIA_review_results.rds"))
   if (make_pptx) {
     ok <- tryCatch({ build_pptx(res, file.path(out_dir, "SIA_review_slides.pptx"), chdir); TRUE }, error = function(e) { msg("PowerPoint failed:", conditionMessage(e)); FALSE })
-    if (ok) msg("Slides written")
+    if (!ok) {   # most often the old deck is still open in PowerPoint and cannot be overwritten: write a copy with the time in its name
+      alt <- file.path(out_dir, sprintf("SIA_review_slides_%s.pptx", format(Sys.time(), "%Y%m%d_%H%M")))
+      ok <- tryCatch({ build_pptx(res, alt, chdir); msg("The usual file is locked (close it in PowerPoint). Slides written to", alt); TRUE }, error = function(e) { msg("PowerPoint failed again:", conditionMessage(e)); FALSE })
+    } else msg("Slides written")
   }
   msg(sprintf("Done in %.0f s. Output folder: %s", as.numeric(difftime(Sys.time(), t0, units = "secs")), out_dir))
   invisible(res)
