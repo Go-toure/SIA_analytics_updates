@@ -743,7 +743,65 @@ ch_heat_rounds <- function(ct, long, countries = NULL) {
                           panel.grid.major.y = element_line(colour = "#EEF2EE"), panel.grid.major.x = element_line(colour = "#EEF2EE"), panel.spacing.x = grid::unit(0.9, "lines"))
   attr(p, "n_rows") <- nrow(rows)
   attr(p, "countries") <- corder
+  attr(p, "row_order") <- rev(as.character(rows$row))   # top to bottom, as in the picture
+  attr(p, "keep") <- keep
   p
+}
+
+# The same picture as a table for Excel: same rows in the same order, one coloured cell per standard (green = met, red = missed), the children vaccinated with a bar
+heat_rounds_sheet <- function(wb, name, ct, long) {
+  library(openxlsx)
+  p <- ch_heat_rounds(ct, long); if (is.null(p)) return(invisible(FALSE))
+  ord <- attr(p, "row_order"); keep <- attr(p, "keep")
+  d <- heat_rounds_data(ct, long)
+  inds <- intersect(c("LQ1", "COV1", "LQ2", "DQ1", "DQ2"), keep)
+  thr <- c(LQ1 = CFG$lqas_scope_min, COV1 = CFG$share_ge95_std, LQ2 = CFG$lqas_pass_std, DQ1 = CFG$delay_max_days, DQ2 = 1)
+  tgt <- function(id) switch(id, DQ1 = sprintf("median days, target \u2264 %g", thr[[id]]), DQ2 = "1 = code matches country", LQ1 = sprintf("%%, target = %g", thr[[id]]), sprintf("%%, target \u2265 %g", thr[[id]]))
+  heads <- c("Country \u00b7 Round", paste0(IND$label[match(inds, IND$id)], "\n", vapply(inds, tgt, "")), "Children vaccinated\nadmin data, no target")
+  addWorksheet(wb, name, tabColour = COL$green)
+  writeData(wb, name, "Where each country stands on every standard, by campaign round (latest assessable campaign of each country)", startRow = 1, startCol = 1)
+  addStyle(wb, name, createStyle(textDecoration = "bold", fontSize = 13, fontColour = COL$navy), rows = 1, cols = 1)
+  writeData(wb, name, "Green = standard met; red = standard missed; grey = no data or not evaluable (N/E). Same rows and order as the chart.", startRow = 2, startCol = 1)
+  addStyle(wb, name, createStyle(fontColour = "#5A6B68", textDecoration = "italic"), rows = 2, cols = 1)
+  hdr <- 4; r0 <- hdr + 1
+  writeData(wb, name, as.data.frame(t(heads), stringsAsFactors = FALSE), startRow = hdr, startCol = 1, colNames = FALSE)
+  addStyle(wb, name, createStyle(fontColour = "white", fgFill = COL$navy, textDecoration = "bold", halign = "center", valign = "center", wrapText = TRUE, border = "bottom"), rows = hdr, cols = seq_along(heads), gridExpand = TRUE)
+  setRowHeights(wb, name, rows = hdr, heights = 58)
+  base <- createStyle(border = "TopBottomLeftRight", borderColour = "white", borderStyle = "thick", halign = "center", valign = "center")
+  sty <- list(
+    Yes = createStyle(fgFill = "#CFE6DB", fontColour = "#1E5C45", textDecoration = "bold", halign = "center", valign = "center", border = "TopBottomLeftRight", borderColour = "white", borderStyle = "thick"),
+    No  = createStyle(fgFill = "#F3CBD5", fontColour = "#8E1F3F", textDecoration = "bold", halign = "center", valign = "center", border = "TopBottomLeftRight", borderColour = "white", borderStyle = "thick"),
+    na  = createStyle(fgFill = "#F2F4F1", fontColour = "#8A9693", textDecoration = "italic", halign = "center", valign = "center", border = "TopBottomLeftRight", borderColour = "white", borderStyle = "thick"))
+  for (i in seq_along(ord)) {
+    r <- r0 + i - 1; rw <- ord[i]
+    writeData(wb, name, rw, startRow = r, startCol = 1)
+    addStyle(wb, name, createStyle(textDecoration = "bold", valign = "center"), rows = r, cols = 1)
+    for (j in seq_along(inds)) {
+      id <- inds[j]; x <- d %>% filter(row == rw, .data$id == !!id) %>% slice(1)
+      cl <- j + 1
+      if (!nrow(x) || is.na(x$value) || x$result == "N/E") {
+        writeData(wb, name, if (nrow(x) && x$result == "N/E") "N/E" else "no data", startRow = r, startCol = cl); addStyle(wb, name, sty$na, rows = r, cols = cl)
+      } else if (id == "DQ1" && x$value < 0) {
+        writeData(wb, name, "date error", startRow = r, startCol = cl); addStyle(wb, name, sty$No, rows = r, cols = cl)
+      } else {
+        writeData(wb, name, round(x$value, 1), startRow = r, startCol = cl)
+        nf <- if (id == "DQ1") '0" d"' else if (id == "DQ2") "0" else '0"%"'
+        addStyle(wb, name, sty[[if (identical(x$result, "Yes")) "Yes" else "No"]], rows = r, cols = cl)
+        addStyle(wb, name, createStyle(numFmt = nf), rows = r, cols = cl, stack = TRUE)
+      }
+    }
+    v <- d %>% filter(row == rw) %>% pull(vac_all) %>% .[!is.na(.)] %>% head(1)
+    cl <- length(inds) + 2
+    if (length(v)) { writeData(wb, name, v, startRow = r, startCol = cl); addStyle(wb, name, createStyle(numFmt = "#,##0", halign = "right", valign = "center"), rows = r, cols = cl) }
+    else { writeData(wb, name, "no data", startRow = r, startCol = cl); addStyle(wb, name, sty$na, rows = r, cols = cl) }
+  }
+  last <- r0 + length(ord) - 1
+  tryCatch(conditionalFormatting(wb, name, cols = length(inds) + 2, rows = r0:last, type = "databar", style = "#9DB9BE", showvalue = TRUE), error = function(e) NULL)
+  setColWidths(wb, name, cols = seq_along(heads), widths = c(24, rep(19, length(inds)), 22))
+  setRowHeights(wb, name, rows = r0:last, heights = 22)
+  freezePane(wb, name, firstActiveRow = r0, firstActiveCol = 2)
+  showGridLines(wb, name, FALSE)
+  invisible(TRUE)
 }
 
 # the by-round chart for the slides: one picture when it is short enough, otherwise two pictures with half of the countries each
@@ -991,6 +1049,7 @@ write_workbook <- function(res, file) {
   add("Country_summary", res$country %>% transmute(Country = country, `Latest score` = latest_score, Band = as.character(band), Risk = as.character(risk), Trend = trend, `First score` = first_score, Change = change,
         `Latest campaign` = latest_response, Round = latest_round, `Latest date` = latest_date, `Evaluable campaigns` = n_eval, `Campaigns in period` = n_campaigns,
         Evidence = latest_evidence, Segment = segment, `Needs validation` = ifelse(needs_validation, "Yes", ""), `Indicators not met (latest)` = failed), c(22, 10, 14, 11, 24, 10, 9, 36, 8, 12, 11, 11, 10, 20, 11, 70))
+  tryCatch(heat_rounds_sheet(wb, "Chart_by_round", res$country, res$long), error = function(e) msg("Sheet Chart_by_round not written:", conditionMessage(e)))
   add("Campaign_scores", res$camp %>% transmute(Country = country, Response, Round = Round_Add, Date = date, Period = period, Vaccine = vaccine, Districts = n_districts, Status = status, Score = score,
         `Indicators met` = n_yes, `Not met` = n_no, `N/E` = n_ne, Evidence = evidence, `Coverage %` = round(cov_total, 1), `Districts >= std % (admin, reference)` = round(share_ge95, 1), `IM districts` = im_n, `IM districts >= std` = im_n95, `IM districts >= std %` = round(im_share95, 1), `IM link` = im_src,
         `Districts < low %` = round(share_low, 1), `Complete %` = round(complete, 1), `Implausible %` = round(implaus, 1), `Median report delay (d)` = med_delay,
