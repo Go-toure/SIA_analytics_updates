@@ -20,3 +20,5 @@ readxl, openxlsx, officer, flextable, ragg.
 
 Standards (thresholds) are working defaults in the `CFG` block at the top of the script
 and must be confirmed by the technical team.
+
+The deck, workbook and charts also include a view by campaign round: one row per round of each country's latest assessable campaign, the four standards, and the children vaccinated taken from the administrative data (column TotalNbrVaccPolio, summed over the districts of the round). Files: `charts/04b_indicator_heatmap_by_round.png` (and `04c_by_round_part1/2.png` for the slides) and the sheet `Indicators_by_round`.

@@ -309,7 +309,7 @@ score_campaigns <- function(units, lqas, prefixes, lqas_max, scope = NULL, im = 
   camp <- units %>% group_by(key, Country, Response, Round_Add) %>%
     summarise(
       n_districts = n(), date = median(sia_date, na.rm = TRUE), first_date = min_date(sia_date), vaccine = paste(sort(unique(vaccine[vaccine != ""])), collapse = " + "),
-      pop_total = sum(pop[!missing], na.rm = TRUE), vac_total = sum(vac[!missing], na.rm = TRUE),
+      pop_total = sum(pop[!missing], na.rm = TRUE), vac_total = sum(vac[!missing], na.rm = TRUE), vac_all = sum_na(vac),
       n_missing = sum(missing), n_implausible = sum(implausible), n_low = sum(low), n_ok95 = sum(ok95),
       n_valid = sum(!missing), report_share = 100 * mean(!is.na(report)), med_delay = suppressWarnings(median(delay, na.rm = TRUE)),
       n_report_before = sum(!is.na(delay) & delay < 0), .groups = "drop") %>%
@@ -436,7 +436,7 @@ score_campaigns <- function(units, lqas, prefixes, lqas_max, scope = NULL, im = 
            period = qlabel(date), period_key = qkey(date), month = format(date, "%b %Y"),
            country = nice_country(Country)) %>%
     arrange(Country, date)
-  long <- long %>% left_join(camp %>% select(key, country, Response, Round_Add, date, period, period_key, evaluable, small), by = "key")
+  long <- long %>% left_join(camp %>% select(key, country, Response, Round_Add, date, period, period_key, evaluable, small, vac_all), by = "key")
   list(camp = camp, long = long)
 }
 
@@ -635,6 +635,106 @@ ch_heat <- function(ct, long) {
 }
 
 # Support groups at a glance: one row per country, grouped by support group, one coloured cell per standard (why a country is in its group)
+
+# ---- standard-by-standard view BY ROUND: one row per round of each country's latest assessable campaign, plus the children vaccinated (admin data)
+fmt_n <- function(v) ifelse(is.na(v), "", ifelse(v >= 1e6, sprintf("%.1f M", v / 1e6), ifelse(v >= 1e3, sprintf("%.0f K", v / 1e3), sprintf("%.0f", v))))
+round_label <- function(r) sub("^(?i)rnd\\s*", "Rnd ", as.character(r), perl = TRUE)
+
+heat_rounds_data <- function(ct, long) {
+  lat <- ct %>% filter(!is.na(latest_score)) %>% distinct(country, latest_response)
+  long %>% filter(evaluable, !small) %>%
+    inner_join(lat, by = c("country", "Response" = "latest_response")) %>%
+    mutate(row = paste0(country, " · ", round_label(Round_Add)))
+}
+
+heat_rounds_table <- function(ct, long) {
+  d <- heat_rounds_data(ct, long)
+  if (!nrow(d)) return(tibble())
+  base <- d %>% distinct(key, country, Response, Round_Add, date, vac_all)
+  w <- d %>% select(key, id, value, result) %>%
+    pivot_wider(names_from = id, values_from = c(value, result), names_glue = "{id}_{.value}")
+  base %>% left_join(w, by = "key") %>% arrange(country, date) %>%
+    transmute(Country = country, Campaign = Response, Round = Round_Add, Date = date,
+              `Children vaccinated (admin data)` = vac_all,
+              `Districts conducted LQAS based on the scope %` = round(LQ1_value, 1), `LQAS conducted: result` = LQ1_result,
+              `IM districts at 95% or more, %` = round(COV1_value, 1), `IM districts: result` = COV1_result,
+              `LQAS accepted %` = round(LQ2_value, 1), `LQAS accepted: result` = LQ2_result,
+              `Median days to report` = DQ1_value, `Timely reporting: result` = DQ1_result)
+}
+
+ch_heat_rounds <- function(ct, long, countries = NULL) {
+  d0 <- heat_rounds_data(ct, long)
+  if (!nrow(d0)) return(NULL)
+  keep <- IND$id[IND$id != "DQ2" | any(d0$id == "DQ2" & d0$result == "No")]   # DQ2 gets a panel only when at least one country fails it
+  lq <- d0 %>% filter(id == "LQ1") %>% group_by(country) %>% slice_max(date, n = 1, with_ties = FALSE) %>% ungroup()
+  allc <- unique(as.character(d0$country))
+  # countries in decreasing order of "LQAS conducted" of their latest round (highest at the top); those without a value at the bottom
+  corder <- c(setdiff(allc, lq$country[!is.na(lq$value)]), as.character(lq$country[order(lq$value)][!is.na(lq$value[order(lq$value)])]))
+  if (!is.null(countries)) corder <- intersect(corder, countries)
+  d <- d0 %>% filter(country %in% corder, id %in% keep)
+  # inside a country the first round is on top, the latest round at the bottom
+  rows <- d %>% distinct(country, row, date) %>% mutate(country = factor(country, levels = corder)) %>% arrange(country, desc(date))
+  thr <- tibble(id = c("COV1", "DQ1", "LQ1", "LQ2", "DQ2"), thr = c(CFG$share_ge95_std, CFG$delay_max_days, CFG$lqas_scope_min, CFG$lqas_pass_std, 1))
+  ord <- intersect(c("LQ1", "COV1", "LQ2", "DQ1", "DQ2"), keep)
+  cap <- 60
+  tgt <- function(id, t) ifelse(id == "DQ1", sprintf("median days, target ≤ %g", t), ifelse(id == "DQ2", "1 = code matches country", ifelse(id == "LQ1", sprintf("%%, target = %g", t), sprintf("%%, target ≥ %g", t))))
+  wl <- function(s) stringr::str_wrap(s, 22)
+  VAC_LABEL <- "Children vaccinated\nadmin data, no target"
+  lvl <- c(paste0(wl(IND$label[match(ord, IND$id)]), "\n", tgt(ord, thr$thr[match(ord, thr$id)])), VAC_LABEL)
+  d <- d %>% left_join(thr, by = "id") %>% mutate(
+    label = factor(paste0(wl(label), "\n", tgt(id, thr)), levels = lvl),
+    rowf = factor(row, levels = rows$row), xv = ifelse(id == "DQ1", pmin(pmax(value, 0), cap), value),
+    cls = factor(result, levels = c("Yes", "No", "N/E")),
+    lab = ifelse(id == "DQ1", ifelse(value < 0, "date error", ifelse(value > cap, sprintf("> %d d", cap), sprintf("%.0f d", value))), ifelse(id == "DQ2", "", sprintf("%.0f%%", value))))
+  have <- d %>% filter(result != "N/E", !is.na(value))
+  ne <- d %>% filter(result == "N/E" | is.na(value))
+  pad <- d %>% filter(id == "DQ1") %>% slice(1) %>% mutate(xv = cap * 1.15)   # room on the right so "> 60 d" is not cut
+  vmax <- suppressWarnings(max(d0$vac_all[d0$country %in% corder], na.rm = TRUE)); if (!is.finite(vmax) || vmax <= 0) vmax <- 1
+  vac <- d0 %>% filter(country %in% corder) %>% distinct(key, row, vac_all) %>%
+    mutate(rowf = factor(row, levels = rows$row), xv = ifelse(is.na(vac_all), NA_real_, vac_all / vmax), lab = fmt_n(vac_all),
+           label = factor(VAC_LABEL, levels = lvl))
+  # the children-vaccinated panel is drawn on a 0-1 scale (share of the largest round); its axis is written back in numbers
+  brk <- function(l) if (l[2] < 2) c(0, 0.5, 1) else if (l[2] > 100) c(0, 25, 50, 75, 100) else pretty(c(0, cap), 4)
+  lab_ax <- function(b) if (all(is.na(b))) b else if (max(b, na.rm = TRUE) <= 1) fmt_n(b * vmax) else format(b)
+  p <- ggplot() +
+    geom_segment(data = have, aes(x = 0, xend = xv, y = rowf, yend = rowf), colour = "#D3D8D2", linewidth = 0.9) +
+    geom_vline(data = d %>% distinct(label, thr) %>% filter(!is.na(thr)), aes(xintercept = thr), colour = COL$navy, linetype = "dashed", linewidth = 0.6) +
+    geom_col(data = vac %>% filter(!is.na(xv)), aes(xv, rowf), orientation = "y", width = 0.5, fill = "#9DB9BE") +
+    geom_text(data = vac %>% filter(!is.na(xv)), aes(xv, rowf, label = lab), hjust = -0.2, size = 4, colour = COL$text) +
+    geom_text(data = vac %>% filter(is.na(xv)), aes(x = 0, y = rowf, label = "no data"), hjust = -0.2, size = 3.6, colour = "#9AA5A3", fontface = "italic") +
+    geom_point(data = have, aes(xv, rowf, colour = cls), size = 3.2) +
+    geom_text(data = have, aes(xv, rowf, label = lab), hjust = -0.35, size = 3.9, colour = COL$text) +
+    geom_text(data = ne, aes(x = 0, y = rowf, label = ifelse(result == "N/E", "N/E", "no data")), hjust = -0.2, size = 3.6, colour = "#9AA5A3", fontface = "italic") +
+    geom_blank(data = pad, aes(xv, rowf)) +
+    facet_wrap(~label, nrow = 1, scales = "free_x", drop = FALSE) +
+    scale_colour_manual(values = c(Yes = COL$green, No = COL$red, `N/E` = "#D3D8D2"), breaks = c("Yes", "No"), labels = c("Standard met", "Standard missed")) +
+    scale_x_continuous(expand = expansion(mult = c(0.01, 0.34)), breaks = brk, labels = lab_ax) +
+    labs(title = "Where each country stands on every standard, by campaign round (latest assessable campaign; dashed line = target)", x = NULL, y = NULL) +
+    theme_sia(10) + theme(strip.text = element_text(size = 10, face = "bold", colour = COL$navy, lineheight = 0.95), legend.text = element_text(size = 10.5), axis.text.x = element_text(size = 8.5), axis.text.y = element_text(size = 10.5, colour = COL$text),
+                          panel.grid.major.y = element_line(colour = "#EEF2EE"), panel.grid.major.x = element_line(colour = "#EEF2EE"), panel.spacing.x = grid::unit(0.9, "lines"))
+  attr(p, "n_rows") <- nrow(rows)
+  attr(p, "countries") <- corder
+  p
+}
+
+# the by-round chart for the slides: one picture when it is short enough, otherwise two pictures with half of the countries each
+heat_rounds_files <- function(ct, long, chdir) {
+  p <- ch_heat_rounds(ct, long); if (is.null(p)) return(character())
+  nr <- attr(p, "n_rows"); out <- file.path(chdir, "04b_indicator_heatmap_by_round.png")
+  save_png(p, out, 13, max(4.5, 0.25 * nr + 1.9))
+  old <- list.files(chdir, pattern = "^04c_by_round_part", full.names = TRUE); if (length(old)) invisible(file.remove(old))
+  if (nr > 22) {
+    cs <- rev(attr(p, "countries"))   # top to bottom
+    d <- heat_rounds_data(ct, long); k <- table(d$country[!duplicated(d$key)])[cs]
+    cut <- which(cumsum(as.numeric(k)) >= sum(as.numeric(k)) / 2)[1]
+    parts <- list(cs[seq_len(cut)], cs[-seq_len(cut)])
+    files <- character()
+    for (i in 1:2) { pp <- ch_heat_rounds(ct, long, countries = parts[[i]]); f <- file.path(chdir, sprintf("04c_by_round_part%d.png", i)); save_png(pp, f, 13, max(3.6, 0.27 * attr(pp, "n_rows") + 1.9)); files <- c(files, f) }
+    return(files)
+  }
+  out
+}
+
 ch_segment_matrix <- function(ct, long) {
   seg_ord <- c("Intensive support", "Active watch", "Focused fixes", "Sustain gains")
   seg_col <- c("Intensive support" = COL$red, "Active watch" = COL$orange, "Focused fixes" = COL$navy, "Sustain gains" = COL$green)
@@ -875,6 +975,8 @@ write_workbook <- function(res, file) {
                                                `Counted on the LQAS slide` = ifelse(Quarter %in% qq, "Yes", "")), c(22, 36, 10, 16, 12, 14, 22))
   }
   add("Indicator_results", res$long %>% transmute(Country = country, Response, Round = Round_Add, Date = date, Period = period, Pillar = pillar, Indicator = label, Standard = standard_text, Value = round(value, 1), Result = result), c(20, 34, 8, 12, 10, 18, 28, 60, 10, 9))
+  { hrt <- tryCatch(heat_rounds_table(res$country, res$long), error = function(e) tibble())
+    if (nrow(hrt)) add("Indicators_by_round", hrt, c(18, 20, 10, 12, 18, 16, 14, 16, 14, 14, 14, 14, 14)) }
   add("Indicators", IND %>% transmute(ID = id, Pillar = pillar, Indicator = label, Standard = standard_text), c(8, 20, 30, 70))
   add("By_indicator_period", res$periods$ind %>% transmute(ID = id, Pillar = pillar, Indicator = label, Period = period, `Campaigns evaluated` = n, Met = met, `Share met %` = round(rate, 1)), c(8, 20, 30, 10, 12, 8, 12))
   add("By_pillar_period", res$periods$pillar %>% transmute(Pillar = pillar, Period = period, `Indicator results` = n, Met = met, `Share met %` = round(rate, 1)), c(22, 10, 14, 8, 12))
@@ -1041,6 +1143,13 @@ pp_txt <- function(x, txt, l, t, w, h, size = 14, bold = FALSE, col = COL$text, 
 pp_img <- function(x, file, l, t, w, h) {
   if (is.null(file) || !file.exists(file)) return(x)
   officer::ph_with(x, officer::external_img(file, width = w, height = h), location = officer::ph_location(left = l, top = t, width = w, height = h))
+}
+
+png_dim <- function(file) { con <- file(file, "rb"); on.exit(close(con)); readBin(con, "raw", 16); c(readBin(con, "integer", 1, size = 4, endian = "big"), readBin(con, "integer", 1, size = 4, endian = "big")) }
+pp_img_fit <- function(x, file, l, t, w, h) {
+  if (is.null(file) || !file.exists(file)) return(x)
+  d <- png_dim(file); s <- min(w / d[1], h / d[2]); nw <- d[1] * s; nh <- d[2] * s
+  pp_img(x, file, l + (w - nw) / 2, t, nw, nh)
 }
 
 new_slide <- function(x, title, subtitle, n, header, span) {
@@ -1230,6 +1339,15 @@ build_pptx <- function(res, file, chdir) {
   x <- ns("Standard-by-standard view per country", "Actual value per country, latest scorable campaign: green = met, red = missed, N/E = not assessable")
   x <- pp_img(x, file.path(chdir, "04_indicator_heatmap.png"), 0.8, 1.55, 11.7, 5.5)
 
+  # 8b --- the same view by campaign round, with the children vaccinated (admin data)
+  hrf <- c(list.files(chdir, pattern = "^04c_by_round_part[0-9]+\\.png$", full.names = TRUE))
+  if (!length(hrf)) hrf <- file.path(chdir, "04b_indicator_heatmap_by_round.png")
+  for (i in seq_along(hrf)) {
+    x <- ns(sprintf("Standard-by-standard view by campaign round%s", ifelse(length(hrf) > 1, sprintf(" (%d of %d)", i, length(hrf)), "")),
+            "Every round of each country's latest scorable campaign; the last panel shows the children vaccinated (administrative data)")
+    x <- pp_img_fit(x, hrf[i], 0.5, 1.5, 12.3, 5.65)
+  }
+
   # 9 --- data quality
   x <- ns("Reliable data come first", "Late reports, mismatched codes and missing LQAS can hide poor results or flatter good ones")
   nea <- res$camp %>% filter(!small, !evaluable)
@@ -1323,6 +1441,7 @@ run_sia_review <- function(admin_file = NULL, lqas_file = NULL, from = NULL, to 
   save_png(ch_trend(ct), file.path(chdir, "02_trajectories.png"), 8, 5)
   save_png(ch_pillar(pt), file.path(chdir, "03_indicators_by_period.png"), 7.6, 5.4)
   save_png(ch_heat(ct, long), file.path(chdir, "04_indicator_heatmap.png"), 11.7, max(4.5, 0.26 * K$n_countries_scored + 1.6))
+  tryCatch(heat_rounds_files(ct, long, chdir), error = function(e) msg("By-round chart failed:", conditionMessage(e)))
   { sm <- tryCatch(ch_segment_matrix(ct, long), error = function(e) { msg("Segment matrix failed:", conditionMessage(e)); NULL }); if (!is.null(sm)) save_png(sm, file.path(chdir, "10_support_groups_matrix.png"), 11.7, 5.3) }
   save_png(ch_dq(camp, long), file.path(chdir, "05_data_quality.png"), 6.7, 4.7)
   save_png(ch_refusal(camp), file.path(chdir, "08_refusals_lq4.png"), 8.6, max(4.2, 0.26 * nrow(latest_lqas_campaign(camp)) + 1.4))
