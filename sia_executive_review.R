@@ -259,6 +259,35 @@ load_lookup <- function(path) {
     filter(!is.na(date), !str_detect(tolower(coalesce(status, "")), "hold|postpone|cancel|suspend")) %>% distinct(country, response, rn, .keep_all = TRUE)
 }
 
+# A report date that falls BEFORE the campaign is a "date error". The commonest cause is a wrong year typed in the report date
+# (e.g. 30 June 2025 for a campaign of 7 May 2026). The campaign calendar (lookup.xlsx) is used to confirm the campaign date:
+# only when the calendar lists a round of the same country and round number starting within `tol` days of the campaign date is the
+# report date moved to the first same day and month that is not earlier than the campaign (at most `max_gap` days later).
+# Every change is listed (attribute "fixes", sheet Report_date_fixes); report dates the calendar cannot confirm are left as they are.
+fix_report_dates <- function(adm, lookup, tol = 21, max_gap = 200) {
+  if (is.null(lookup) || !nrow(lookup) || !all(c("SIA_date", "Date_Report") %in% names(adm))) return(adm)
+  bad <- which(!is.na(adm$SIA_date) & !is.na(adm$Date_Report) & adm$Date_Report < adm$SIA_date)
+  if (!length(bad)) return(adm)
+  cand <- adm$Date_Report[bad]
+  for (k in 1:3) { nx <- cand %m+% years(1); cand <- as.Date(ifelse(cand < adm$SIA_date[bad], nx, cand), origin = "1970-01-01") }
+  ok_gap <- !is.na(cand) & cand >= adm$SIA_date[bad] & as.numeric(cand - adm$SIA_date[bad]) <= max_gap
+  rn <- round_num(adm$Round_Add[bad])
+  lk_date <- map2_dbl(adm$Country[bad], seq_along(bad), function(ctry, i) {
+    z <- lookup[lookup$country == ctry & lookup$rn %in% rn[i], , drop = FALSE]
+    if (!nrow(z)) return(NA_real_)
+    d <- abs(as.numeric(z$date - adm$SIA_date[bad[i]])); if (min(d) <= tol) as.numeric(z$date[which.min(d)]) else NA_real_
+  })
+  fix <- ok_gap & !is.na(lk_date)
+  if (!any(fix)) return(adm)
+  idx <- bad[fix]
+  fixes <- tibble(Country = adm$Country[idx], Response = adm$Response[idx], Round = adm$Round_Add[idx], sia_date = adm$SIA_date[idx],
+                  calendar_date = as.Date(lk_date[fix], origin = "1970-01-01"), report_before = adm$Date_Report[idx], report_after = as.Date(cand[fix], origin = "1970-01-01")) %>%
+    group_by(Country, Response, Round, sia_date, calendar_date, report_before, report_after) %>% summarise(records = n(), .groups = "drop")
+  adm$Date_Report[idx] <- as.Date(cand[fix], origin = "1970-01-01")
+  attr(adm, "fixes") <- fixes
+  adm
+}
+
 # ----------------------------------------------------------------------------- 5. ANALYSIS
 sum_na <- function(x) if (all(is.na(x))) NA_real_ else sum(x, na.rm = TRUE)
 max_na <- function(x) if (all(is.na(x))) NA_real_ else max(x, na.rm = TRUE)
@@ -975,6 +1004,9 @@ write_workbook <- function(res, file) {
                                                `Counted on the LQAS slide` = ifelse(Quarter %in% qq, "Yes", "")), c(22, 36, 10, 16, 12, 14, 22))
   }
   add("Indicator_results", res$long %>% transmute(Country = country, Response, Round = Round_Add, Date = date, Period = period, Pillar = pillar, Indicator = label, Standard = standard_text, Value = round(value, 1), Result = result), c(20, 34, 8, 12, 10, 18, 28, 60, 10, 9))
+  if (!is.null(res$date_fixes) && nrow(res$date_fixes))
+    add("Report_date_fixes", res$date_fixes %>% transmute(Country = nice_country(Country), `Campaign code` = Response, Round, `Campaign date (admin file)` = sia_date, `Campaign date (calendar)` = calendar_date,
+                                                           `Report date before` = report_before, `Report date after` = report_after, Records = records), c(20, 34, 8, 16, 16, 16, 16, 9))
   { hrt <- tryCatch(heat_rounds_table(res$country, res$long), error = function(e) tibble())
     if (nrow(hrt)) add("Indicators_by_round", hrt, c(18, 20, 10, 12, 18, 16, 14, 16, 14, 14, 14, 14, 14)) }
   add("Indicators", IND %>% transmute(ID = id, Pillar = pillar, Indicator = label, Standard = standard_text), c(8, 20, 30, 70))
@@ -1422,6 +1454,9 @@ run_sia_review <- function(admin_file = NULL, lqas_file = NULL, from = NULL, to 
   lqas_max <- if (!is.null(lqas) && nrow(lqas)) suppressWarnings(max(lqas$lqas_date, na.rm = TRUE)) else as.Date(NA)
   if (is.infinite(lqas_max)) lqas_max <- as.Date(NA)
 
+  adm <- fix_report_dates(adm, lookup)
+  date_fixes <- attr(adm, "fixes")
+  if (!is.null(date_fixes) && nrow(date_fixes)) msg(sprintf("Report date corrected (wrong year, campaign date confirmed by the calendar): %d records in %d rounds, see sheet Report_date_fixes", sum(date_fixes$records), nrow(date_fixes)))
   units <- build_units(adm, from, to)
   if (!nrow(units)) stop("No campaign with a date between ", from, " and ", to, " in the admin file.")
   sc <- score_campaigns(units, lqas, prefixes, lqas_max, scope, im)
@@ -1432,7 +1467,7 @@ run_sia_review <- function(admin_file = NULL, lqas_file = NULL, from = NULL, to 
   if (length(zoom) == 1 && grepl(",", zoom)) zoom <- trimws(strsplit(zoom, ",")[[1]])
   zoom <- trimws(zoom[nzchar(zoom)]); zoom <- unique(ifelse(toupper(zoom) %in% c("DRC", "CAR"), toupper(zoom), nice_country(toupper(zoom))))
   lt <- lqas_tables(lqas, camp, zoom, from, to, lookup)
-  res <- list(title = CFG$title, admin_file = admin_path, lqas_file = if (is.na(lqas_path)) NULL else lqas_path, scope_file = if (is.na(scope_path) || is.null(scope)) NULL else scope_path, im_file = if (is.na(im_path) || is.null(im)) NULL else im_path, lookup_file = if (is.na(lk_path) || is.null(lookup)) NULL else lk_path, calendar = lookup, imq = im_quadrants(im, from, to), K = K, camp = camp, long = long, units = units,
+  res <- list(title = CFG$title, admin_file = admin_path, lqas_file = if (is.na(lqas_path)) NULL else lqas_path, scope_file = if (is.na(scope_path) || is.null(scope)) NULL else scope_path, im_file = if (is.na(im_path) || is.null(im)) NULL else im_path, lookup_file = if (is.na(lk_path) || is.null(lookup)) NULL else lk_path, calendar = lookup, imq = im_quadrants(im, from, to), K = K, camp = camp, long = long, units = units, date_fixes = date_fixes,
               country = ct, periods = pt, messages = make_messages(K, ct, pt), decisions = make_decisions(ct, K), segments = segment_table(ct), lqas_t = lt, zoom = zoom, lqas_unmatched = NULL)
   msg(sprintf("%d campaign rounds (%d evaluable, %d N/E, %d too small) in %d countries", K$n_campaigns, K$n_eval, K$n_ne, K$n_small, K$n_countries))
 
