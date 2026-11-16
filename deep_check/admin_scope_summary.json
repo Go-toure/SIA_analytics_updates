@@ -1,5 +1,5 @@
 {
-  "coverage_rule": "official coverage = TotalNbrVaccPolio / PopPolio (population as adjusted by the admin engine); AFRO-Dash reads the stored CVPolio column",
+  "coverage_rule": "official coverage = TotalNbrVaccPolio / PopPolio (population as adjusted by the admin engine); CVPolio is a reference column; AFRO-Dash now computes the official figure itself",
   "cv_column_vs_official": {
     "rows": 41595,
     "differs_more_than_2_points_pct": 20.3,

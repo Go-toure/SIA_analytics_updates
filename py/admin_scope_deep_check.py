@@ -4,8 +4,8 @@ admin_scope_deep_check.py - statistical checks on the admin data, the SCOPE camp
 
     python py/admin_scope_deep_check.py
 
-A. ADMIN FILE (scope/data/AFRO_admin_data.xlsx, polio rows). Official coverage = TotalNbrVaccPolio / PopPolio (the admin engine adjusts PopPolio; CVPolio is the stored country value, only filled when empty,
-   and AFRO-Dash reads it). Exact rules: stored CVPolio more than 2 points (the portal's tolerance) from vaccinated / PopPolio, with the effect on the dashboard bands, coverage above 150% or above 200%, target population
+A. ADMIN FILE (scope/data/AFRO_admin_data.xlsx, polio rows). Official coverage = TotalNbrVaccPolio / PopPolio (the admin engine adjusts PopPolio; CVPolio is a reference column holding the stored country value; the engine's CV_nOPV2 / CV_bOPV
+   use PopPolio, and AFRO-Dash now computes vaccinated / PopPolio itself). Exact rules: stored CVPolio more than 2 points (the portal's tolerance) from vaccinated / PopPolio, with the effect on the dashboard bands, coverage above 150% or above 200%, target population
    far from the country's usual share of the total population, target population or vaccinated counts that jump against the previous campaign of the same district, the same
    (target, vaccinated) pair in 3+ districts of one campaign round (copy-paste), conflicting duplicate rows, impossible dates. Soft: vaccinated equal to the target, round
    numbers (ending in 00), no vaccinated long after the campaign. Rounding: a z-test of the share of counts ending in 00 per country and year. A model (Isolation Forest) marks
@@ -164,7 +164,7 @@ def main():
     for c, g in jl.groupby("country"):
         if len(g) >= 200: pc.append(dict(country=c, lots=len(g), spearman=round(float(spearmanr(g.admin_cov.clip(0, 1.5), g.total_sampled - g.total_vaccinated).statistic), 3), fail_pct_admin_100_plus=round(100 * float(g[g.admin_cov >= 1].fail.mean()), 1), fail_pct_admin_below_90=round(100 * float(g[g.admin_cov < .9].fail.mean()), 1) if (g.admin_cov < .9).sum() >= 20 else None))
     pd.DataFrame(pc).sort_values("spearman").to_csv(OUT / "admin_vs_lqas_spearman_by_country.csv", index=False)
-    summ = dict(coverage_rule="official coverage = TotalNbrVaccPolio / PopPolio (population as adjusted by the admin engine); AFRO-Dash reads the stored CVPolio column", cv_column_vs_official=dict(
+    summ = dict(coverage_rule="official coverage = TotalNbrVaccPolio / PopPolio (population as adjusted by the admin engine); CVPolio is a reference column; AFRO-Dash now computes the official figure itself", cv_column_vs_official=dict(
                 rows=int(len(imp)), differs_more_than_2_points_pct=round(100 * imp.differs.mean(), 1), band_differs_pct=round(100 * imp.band_differs.mean(), 1), dashboard_ge95_pct=round(100 * imp.cv_ge95.mean(), 1),
                 official_ge95_pct=round(100 * imp.off_ge95.mean(), 1), rows_ge95_by_cv_but_lt80_official=int(imp.cv_ge95_off_lt80.sum())), strict_join_exact_date_and_round=strict, admin_polio_rows=int(n), admin_names_placed_on_afrogdb_pct=round(100 * a.geo.notna().mean(), 1), hard_flag_pct_excluding_cv_mismatch=round(100 * F.any_hard.mean(), 2),
                 flag_pct={c: round(100 * F[c].mean(), 2) for c in cols}, rounding_country_years_flagged=int(rr.flagged.sum()) if len(rr) else 0, rounding_tested=int(len(rr)),
