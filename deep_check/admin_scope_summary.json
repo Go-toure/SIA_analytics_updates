@@ -1,0 +1,61 @@
+{
+  "coverage_rule": "official coverage = TotalNbrVaccPolio / PopPolio (population as adjusted by the admin engine); AFRO-Dash reads the stored CVPolio column",
+  "cv_column_vs_official": {
+    "rows": 41595,
+    "differs_more_than_2_points_pct": 20.3,
+    "band_differs_pct": 10.3,
+    "dashboard_ge95_pct": 86.2,
+    "official_ge95_pct": 78.1,
+    "rows_ge95_by_cv_but_lt80_official": 2635
+  },
+  "strict_join_exact_date_and_round": {
+    "lots": 13252,
+    "spearman": -0.011,
+    "fail_pct_admin_100_plus": 21.4,
+    "fail_pct_admin_below_90": 24.8
+  },
+  "admin_polio_rows": 41730,
+  "admin_names_placed_on_afrogdb_pct": 89.3,
+  "hard_flag_pct_excluding_cv_mismatch": 11.91,
+  "flag_pct": {
+    "CV_COLUMN_DIFFERS": 20.26,
+    "COVERAGE_OVER_150": 2.86,
+    "COVERAGE_OVER_200": 1.46,
+    "POP_JUMP": 2.92,
+    "VACC_JUMP": 2.9,
+    "COPIED_PAIR": 0.0,
+    "CONFLICTING_DUPLICATE": 3.82,
+    "DATE_IMPLAUSIBLE": 2.26,
+    "VACC_EQUALS_TARGET": 0.65,
+    "ROUND_00": 1.47,
+    "NO_VACC_AFTER_CAMPAIGN": 1.11,
+    "MODEL_OUTLIER": 1.02,
+    "any_hard": 11.91
+  },
+  "rounding_country_years_flagged": 2,
+  "rounding_tested": 77,
+  "model_planted_recall_vaccinated_x3": 0.168,
+  "model_planted_recall_target_minus_70pct": 0.19,
+  "scope_completeness_30_day_window_pct": 77.9,
+  "scope_completeness_reliable_countries_pct": 72.1,
+  "reliable_planned": 34624,
+  "scope_planned_old_enough": 42563,
+  "scope_reported": 30552,
+  "scope_completeness_pct": 71.8,
+  "scope_names_placed_pct": 97.9,
+  "admin_rows_with_no_planned_round": 5714,
+  "admin_rows_placed": 37252,
+  "lqas_lots_joined": 19616,
+  "spearman_admin_cov_vs_lqas_missed": -0.032,
+  "lqas_fail_pct_by_band": {
+    "<80%": 23.8,
+    "80-90%": 27.8,
+    "90-95%": 28.5,
+    "95-100%": 20.2,
+    "100-110%": 19.5,
+    "110-130%": 23.1,
+    ">130%": 17.6
+  },
+  "admin_100_plus_and_lqas_fail": 2824,
+  "admin_100_plus": 13614
+}

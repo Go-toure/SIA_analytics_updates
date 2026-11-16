@@ -11,3 +11,6 @@ SIA_review_*
 .Rhistory
 .RData
 .Rproj.user/
+
+# Row-level flags carry district numbers: local only (the other deep_check files are summaries)
+deep_check/admin_record_flags.csv
